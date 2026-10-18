@@ -53,9 +53,13 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+-- Shared participant roster: real Players + bot Models (BotService builds
+-- them; BotRegistry is dependency-free so requiring it is always safe).
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local EggPossessionChanged = Remotes:WaitForChild("EggPossessionChanged")
@@ -131,7 +135,18 @@ local function getAliveHumanoid(character)
 	return nil
 end
 
+-- Server-side mirror of every feedback event (Main creates the bindable;
+-- EconomyService listens for knockdown/steal counting). Cached lazily;
+-- `false` means "looked, not there" so we never re-search every tick.
+local serverFeedback = nil
+
 local function broadcastFeedback(kind, data)
+	if serverFeedback == nil then
+		serverFeedback = ServerScriptService:FindFirstChild("ServerFeedback") or false
+	end
+	if serverFeedback then
+		serverFeedback:Fire(kind, data or {})
+	end
 	FeedbackEvent:FireAllClients(kind, data or {})
 end
 
@@ -264,8 +279,8 @@ local function tryPickup(player)
 	if state ~= STATE_LOOSE or not egg then
 		return false
 	end
-	if typeof(player) ~= "Instance" or not player:IsA("Player") then
-		return false
+	if not BotRegistry.IsParticipant(player) then
+		return false -- spectators (>MaxPlayers servers) and junk cannot grab
 	end
 
 	local lockUntil = pickupLockout[player]
@@ -278,7 +293,8 @@ local function tryPickup(player)
 		return false
 	end
 
-	local character = player.Character
+	-- Works for Players (their Character) and bots (the Model itself).
+	local character = BotRegistry.GetCharacter(player)
 	local humanoid = getAliveHumanoid(character)
 	local torso = getTorso(character)
 	if not humanoid or not torso then
@@ -322,8 +338,9 @@ local function onEggTouched(hit)
 		return
 	end
 	local character = hit:FindFirstAncestorOfClass("Model")
-	local player = character and Players:GetPlayerFromCharacter(character)
-	if not player then
+	local player = character and (Players:GetPlayerFromCharacter(character)
+		or BotRegistry.GetBotFromCharacter(character))
+	if not player or not BotRegistry.IsParticipant(player) then
 		return
 	end
 
@@ -369,8 +386,8 @@ local function doFumble(player, reason, popVelocity)
 	-- Place the egg loose at the carrier's position (slightly forward+up so
 	-- it does not spawn inside the character), clamped inside the arena so a
 	-- fumble against a wall cannot push it out of bounds.
-	local root = previousCarrier.Character
-		and previousCarrier.Character:FindFirstChild("HumanoidRootPart")
+	local carrierCharacter = BotRegistry.GetCharacter(previousCarrier)
+	local root = carrierCharacter and carrierCharacter:FindFirstChild("HumanoidRootPart")
 	local dropPosition
 	if root then
 		dropPosition = root.CFrame:PointToWorldSpace(Vector3.new(0, 1, -2))
@@ -494,14 +511,15 @@ local function tickOnce()
 		--    register reliably at low framerates / on mobile.
 		--    TODO(polish): add line-of-sight check so it cannot grab through walls.
 		if state == STATE_LOOSE then
-			for _, player in ipairs(Players:GetPlayers()) do
-				local humanoid = getAliveHumanoid(player.Character)
+			for _, entity in ipairs(BotRegistry.GetParticipants()) do
+				local character = BotRegistry.GetCharacter(entity)
+				local humanoid = getAliveHumanoid(character)
 				if humanoid then
-					local root = player.Character:FindFirstChild("HumanoidRootPart")
+					local root = character:FindFirstChild("HumanoidRootPart")
 					if root
 						and (root.Position - egg.Position).Magnitude <= Config.EggProximityPickupRadius
 					then
-						if tryPickup(player) then
+						if tryPickup(entity) then
 							break -- one pickup per tick maximum
 						end
 					end
@@ -655,10 +673,19 @@ function EggService.Fumble(target, reason, popVelocity)
 		target = carrier
 	end
 	if typeof(target) == "string" then
-		target = Players:FindFirstChild(target)
+		local resolved = Players:FindFirstChild(target)
+		if not resolved then
+			for _, model in ipairs(BotRegistry.GetBots()) do
+				if model.Name == target then
+					resolved = model
+					break
+				end
+			end
+		end
+		target = resolved
 	end
-	if typeof(target) ~= "Instance" or not target:IsA("Player") then
-		warn("[EggService] Fumble: could not resolve target player (" .. tostring(target) .. ")")
+	if not BotRegistry.IsParticipant(target) then
+		warn("[EggService] Fumble: could not resolve target (" .. tostring(target) .. ")")
 		return false
 	end
 	if not carrier then

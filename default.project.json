@@ -32,6 +32,9 @@
 				"RoundEnded": { "$className": "RemoteEvent" },
 				"MatchEnded": { "$className": "RemoteEvent" },
 				"FeedbackEvent": { "$className": "RemoteEvent" },
+				"MatchRewards": { "$className": "RemoteEvent" },
+				"HatcheryRequest": { "$className": "RemoteEvent" },
+				"HatcheryUpdated": { "$className": "RemoteEvent" },
 				"DebugCommand": { "$className": "RemoteEvent" }
 			}
 		},

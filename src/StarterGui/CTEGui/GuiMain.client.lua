@@ -4,18 +4,22 @@
 	Builds and routes the whole GUI. Runs once per player (PlayerGui copy of
 	the StarterGui screen, ResetOnSpawn = false), so it survives respawns.
 
+	Layout philosophy: NO full-screen menus. The HUD is always up; the lobby
+	is just the idle HUD + a small collapsible CONTROLS panel + a HATCHERY
+	button. Matches start automatically (bots fill empty slots), results
+	panels overlay the HUD, and toasts report rewards.
+
 	Data sources (NO game logic is duplicated here -- everything is state read
 	from the server):
-	  MatchStateChanged  -> which screen is visible, round clock, countdown
+	  MatchStateChanged  -> timer/round/status line, countdown, screen flow
 	  RoundEnded         -> round-end results panel
 	  MatchEnded         -> match-end results panel (MVP + standings)
-	  HoldTimeUpdated    -> hold-time board rows
+	  MatchRewards       -> "+Clout / +Fragments" toast (personal)
+	  HoldTimeUpdated    -> hold-time board rows (players AND bots)
 	  EggPossessionChanged -> carrier highlight
-	  FeedbackEvent      -> steal feed toasts + cooldown wipes (from SUCCESS
-	                        events like PunchSwing/DashStart, so keyboard and
-	                        button users both see them)
-	  Player attributes  -> HasEgg (button context states), Stamina (bar +
-	                        dash availability)
+	  HatcheryUpdated    -> hatchery panel snapshot
+	  FeedbackEvent      -> steal/grip feed + cooldown wipes + pet/egg toasts
+	  Player attributes  -> HasEgg (button context states), Stamina (bar/dash)
 
 	Buttons call _G.CTEInput (exposed by ClientInput) which fires the Request*
 	RemoteEvents; the server validates everything.
@@ -30,9 +34,12 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
 local RoundEnded = Remotes:WaitForChild("RoundEnded")
 local MatchEnded = Remotes:WaitForChild("MatchEnded")
+local MatchRewards = Remotes:WaitForChild("MatchRewards")
 local HoldTimeUpdated = Remotes:WaitForChild("HoldTimeUpdated")
 local EggPossessionChanged = Remotes:WaitForChild("EggPossessionChanged")
 local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
+local HatcheryRequest = Remotes:WaitForChild("HatcheryRequest")
+local HatcheryUpdated = Remotes:WaitForChild("HatcheryUpdated")
 
 -- Fallbacks if _G.CTEInput is not ready yet (should never happen mid-match).
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
@@ -42,10 +49,11 @@ local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
 
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
-local LobbyScreen = require(script.Parent:WaitForChild("LobbyScreen"))
+local ControlsPanel = require(script.Parent:WaitForChild("ControlsPanel"))
 local HudScreen = require(script.Parent:WaitForChild("HudScreen"))
 local ResultsScreens = require(script.Parent:WaitForChild("ResultsScreens"))
 local SettingsPanel = require(script.Parent:WaitForChild("SettingsPanel"))
+local HatcheryPanel = require(script.Parent:WaitForChild("HatcheryPanel"))
 
 local player = Players.LocalPlayer
 local gui = script.Parent -- the CTEGui ScreenGui (already in PlayerGui)
@@ -60,15 +68,18 @@ end)
 ---------------------------------------------------------------------------
 
 local hud = HudScreen.Create(gui)
-local lobby = LobbyScreen.Create(gui)
 local results = ResultsScreens.Create(gui)
 local settings = SettingsPanel.Create(gui)
+local controls = ControlsPanel.Create(gui)
+local hatchery = HatcheryPanel.Create(gui) -- above controls: it is an overlay
 
--- Info toast (top-center, under the timer) for placeholder/flow messages.
+hud:SetVisible(true) -- the HUD is always up now (idle in the lobby)
+
+-- Info toast (top-center, under the timer) for rewards/flow messages.
 local toastFrame = UiKit.frame({
 	Name = "Toasts",
-	Size = UDim2.fromScale(0.5, 0.12),
-	Position = UDim2.fromScale(0.25, 0.14),
+	Size = UDim2.fromScale(0.5, 0.16),
+	Position = UDim2.fromScale(0.25, 0.18),
 	BackgroundTransparency = 1,
 }, gui)
 UiKit.listLayout(toastFrame, Enum.FillDirection.Vertical, 0.02,
@@ -77,7 +88,7 @@ UiKit.listLayout(toastFrame, Enum.FillDirection.Vertical, 0.02,
 local function toast(message, color)
 	local label = UiKit.frame({
 		Name = "Toast",
-		Size = UDim2.fromScale(1, 0.4),
+		Size = UDim2.fromScale(1, 0.3),
 		BackgroundColor3 = UiKit.Theme.Panel,
 		BackgroundTransparency = 0.1,
 	}, toastFrame)
@@ -90,7 +101,7 @@ local function toast(message, color)
 		TextWrapped = true,
 	}, label)
 
-	task.delay(2.6, function()
+	task.delay(3.2, function()
 		if label.Parent then
 			UiKit.tween(label, 0.4, { BackgroundTransparency = 1 })
 			for _, child in ipairs(label:GetChildren()) do
@@ -133,17 +144,8 @@ end
 hud.OnSettings = function()
 	settings:Toggle()
 end
-lobby.OnSettings = function()
-	settings:Toggle()
-end
-
-lobby.OnPlay = function()
-	toast(("Matches start automatically at %d+ players — ready-up coming soon!")
-		:format(Config.MinPlayersToStart), UiKit.Theme.Info)
-end
-lobby.OnMode2v2v2 = function()
-	toast("2v2v2 is a placeholder for now — team mode arrives in a later update!",
-		UiKit.Theme.Info)
+hud.OnHatchery = function()
+	hatchery:Toggle()
 end
 
 results.OnPlayAgain = function()
@@ -164,30 +166,43 @@ local function applyState(stateName, data)
 	currentState = stateName
 	data = data or {}
 
-	lobby:SetVisible(stateName == "Lobby")
-	hud:SetVisible(stateName ~= "Lobby")
-
 	if stateName == "Lobby" then
-		lobby:SetPlayerCount(data.Players or #Players:GetPlayers())
 		results:HideRoundEnd()
 		results:HideMatchEnd()
+		hud.timerLabel.Text = "--"
+		hud.countdownLabel.Visible = false
+		hud.roundLabel.Text = "Lobby"
+		controls:SetCollapsed(false)
+		if data.BotsEnabled then
+			hud:SetStatus("Waiting for players… bots fill empty slots")
+		elseif data.PrivateServer then
+			hud:SetStatus("Private server — start when ready")
+		else
+			hud:SetStatus(("Need %d+ players to start"):format(
+				data.MinPlayersToStart or Config.MinPlayersToStart))
+		end
 	elseif stateName == "Countdown" then
 		results:HideRoundEnd()
 		results:HideMatchEnd()
+		controls:SetCollapsed(true)
+		hud:SetStatus("")
 		hud:ShowCountdown(data.StartsIn or 3)
 	elseif stateName == "RoundPlaying" then
 		results:HideRoundEnd()
 		results:HideMatchEnd()
 		matchEndPayload = nil
+		hud:SetStatus("")
 		if data.Round then
 			hud:SetRoundInfo(data.Round, data.RoundsPerMatch)
 		end
 		hud:SetTimeLeft(data.TimeLeft)
 	elseif stateName == "RoundEnd" then
 		results:HideMatchEnd()
+		hud:SetStatus("Round over")
 		-- panel content arrives via RoundEnded (fired just before this state)
 	elseif stateName == "MatchEnd" then
 		results:HideRoundEnd()
+		hud:SetStatus("Match over")
 		if matchEndPayload then
 			results:ShowMatchEnd(matchEndPayload)
 		end
@@ -218,7 +233,37 @@ EggPossessionChanged.OnClientEvent:Connect(function(newCarrier)
 end)
 
 ---------------------------------------------------------------------------
--- FeedbackEvent: steal feed + cooldown wipes (success events only)
+-- Meta layer: rewards toast + hatchery snapshot
+---------------------------------------------------------------------------
+
+MatchRewards.OnClientEvent:Connect(function(rewards)
+	if type(rewards) ~= "table" then
+		return
+	end
+	toast(("Match rewards: +%d Clout, +%d Fragments (rank #%d)")
+		:format(rewards.Clout or 0, rewards.Fragments or 0, rewards.Rank or 0),
+		UiKit.Theme.Accent)
+	if rewards.IsMVP then
+		toast("MVP bonus: +" .. Config.Economy.CloutMVPBonus .. " Clout ★", UiKit.Theme.Good)
+	end
+	if rewards.PityEgg or rewards.EggGranted then
+		toast("PITY UNLOCKED: a guaranteed-RARE egg was granted! Check the hatchery.",
+			UiKit.Theme.Info)
+	end
+	if Config.DebugVerboseLogging then
+		print(("[CTE] rewards: clout=+%d frags=+%d kd=%d steals=%d hold=%ds rank=%d mvp=%s pity=%s")
+			:format(rewards.Clout or 0, rewards.Fragments or 0, rewards.Knockdowns or 0,
+				rewards.Steals or 0, rewards.HoldSeconds or 0, rewards.Rank or 0,
+				tostring(rewards.IsMVP), tostring(rewards.PityEgg)))
+	end
+end)
+
+HatcheryUpdated.OnClientEvent:Connect(function(snapshot)
+	hatchery:SetSnapshot(snapshot)
+end)
+
+---------------------------------------------------------------------------
+-- FeedbackEvent: feed + toasts + cooldown wipes (success events only)
 ---------------------------------------------------------------------------
 
 FeedbackEvent.OnClientEvent:Connect(function(kind, data)
@@ -231,6 +276,9 @@ FeedbackEvent.OnClientEvent:Connect(function(kind, data)
 		local attacker = UiKit.playerName(data.Attacker, "?")
 		local victim = UiKit.playerName(data.Victim, "?")
 		hud:PushFeed(("%s stole the egg from %s!"):format(attacker, victim), UiKit.Theme.Accent)
+	elseif kind == "GripSave" then
+		hud:PushFeed(("%s's pet GRIPPED the egg!"):format(
+			UiKit.playerName(data.Player, "?")), UiKit.Theme.Good)
 	elseif kind == "EggPickup" then
 		hud:PushFeed(("%s grabbed the egg!"):format(UiKit.playerName(data.Player, "?")),
 			UiKit.Theme.Good)
@@ -242,6 +290,27 @@ FeedbackEvent.OnClientEvent:Connect(function(kind, data)
 			UiKit.Theme.Bad)
 	elseif kind == "EggOutOfBounds" then
 		hud:PushFeed("The egg flew out of the arena — respawning…", UiKit.Theme.Bad)
+	end
+
+	-- Personal toasts (meta layer).
+	if kind == "PetHatched" and data.Pet then
+		local pet = data.Pet
+		toast(("You hatched %s! (%s · %s · grip +%.1f%%)"):format(
+			pet.Name or "a pet", pet.Rarity or "?", pet.Size or "?", pet.GripBonus or 0),
+			UiKit.Theme.Accent)
+	elseif kind == "EggGranted" then
+		toast("You received an egg! Open it in the HATCHERY when it hatches.",
+			UiKit.Theme.Info)
+	elseif kind == "NotEnoughClout" then
+		toast(("Not enough Clout (need %d, have %d)"):format(data.Need or 0, data.Have or 0),
+			UiKit.Theme.Bad)
+	elseif kind == "NotEnoughFragments" then
+		toast(("Not enough fragments (need %d, have %d)"):format(data.Need or 0, data.Have or 0),
+			UiKit.Theme.Bad)
+	elseif kind == "EggNotReady" then
+		toast("That egg is still hatching…", UiKit.Theme.Bad)
+	elseif kind == "DataNotReady" then
+		toast("Your profile is still loading — try again in a second.", UiKit.Theme.Info)
 	end
 
 	-- Cooldown wipes for the LOCAL player, driven by server success events.
@@ -273,19 +342,11 @@ refreshStamina()
 
 ---------------------------------------------------------------------------
 -- Initial state (the server resyncs us via MatchStateChanged shortly after
--- join if a match is already running)
+-- join if a match is already running, and pushes a HatcheryUpdated snapshot
+-- as soon as the profile loads)
 ---------------------------------------------------------------------------
 
-lobby:SetPlayerCount(#Players:GetPlayers())
-Players.PlayerAdded:Connect(function()
-	if currentState == "Lobby" then
-		lobby:SetPlayerCount(#Players:GetPlayers())
-	end
+applyState("Lobby", { BotsEnabled = Config.Bots.Enabled })
+task.delay(2, function()
+	HatcheryRequest:FireServer("Refresh")
 end)
-Players.PlayerRemoving:Connect(function()
-	if currentState == "Lobby" then
-		lobby:SetPlayerCount(#Players:GetPlayers() - 1)
-	end
-end)
-
-applyState("Lobby", { Players = #Players:GetPlayers() })

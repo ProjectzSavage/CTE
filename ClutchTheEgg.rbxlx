@@ -245,7 +245,7 @@ local Config = {}
 -- Match flow
 --------------------------------------------------------------------------
 Config.MaxPlayers = 6            -- hard player cap for the arena
-Config.MinPlayersToStart = 2     -- countdown starts at 2+ players (bots may fill in later)
+Config.MinPlayersToStart = 2     -- humans needed to start without bots (bots can start at 1; private servers at 1)
 Config.RoundLength = 75          -- seconds per round
 Config.RoundsPerMatch = 3        -- best of 3
 Config.RoundsToWinMatch = 2      -- first to 2 round wins takes the match
@@ -386,6 +386,143 @@ Config.Animations = {
 }
 
 --------------------------------------------------------------------------
+-- Data / persistence (DataService)
+--------------------------------------------------------------------------
+Config.Data = {
+	StoreName = "CTE_PlayerData_v1",
+	AutoSaveSeconds = 60,        -- periodic save for every loaded profile
+	LoadRetries = 3,             -- attempts before falling back to a temp profile
+	SaveRetries = 2,
+	RetryDelaySeconds = 2,
+	-- Studio testing: keep false -> profiles live in a memory table (still
+	-- persist across rejoins inside the same Studio session, and the real
+	-- DataStore code path is used in production builds).
+	UseRealStoreInStudio = false,
+}
+
+--------------------------------------------------------------------------
+-- Economy: Clout (soft currency) + Egg Fragments (EconomyService)
+--------------------------------------------------------------------------
+-- Clout is awarded once per completed match:
+--   participation + hold seconds + knockdowns/steals + round wins + MVP.
+-- Fragments are ranked: top 3 hold times earn more, ranks 4-6 still earn
+-- some (never zero). 10 fragments convert into 1 egg in the Hatchery.
+Config.Economy = {
+	StartingClout = 150,
+	CloutParticipation = 25,     -- finishing a match at all
+	CloutPerHoldSecond = 1,      -- per second of MATCH hold time
+	CloutPerKnockdown = 5,       -- per punch that connected ("Hit")
+	CloutPerSteal = 8,           -- per egg steal (punch or dash-fumble)
+	CloutPerRoundWin = 30,
+	CloutMVPBonus = 100,
+	MaxKnockdownsCredited = 40,  -- caps per match (anti-farm)
+	MaxStealsCredited = 40,
+	FragmentsByRank = { 5, 4, 3, 2, 2, 1 }, -- rank 1..6, never zero
+	EggCloutCost = 250,          -- Hatchery: buy one egg with Clout
+	EggFragmentCost = 10,        -- Hatchery: convert 10 fragments into one egg
+	HatchTimeSeconds = 45,       -- every egg has a hatch timer
+	PityMatchesWithoutRoundWin = 10, -- after this many winless matches the
+	                                 -- NEXT round win grants a guaranteed-rare egg
+}
+
+--------------------------------------------------------------------------
+-- Pets (HatcheryService) -- flex value + a TINY capped bonus. Not pay-to-win.
+--------------------------------------------------------------------------
+Config.Pets = {
+	-- Hatch roll weights (relative; renormalized automatically).
+	RarityWeights = { Common = 60, Rare = 25, Epic = 10, Legendary = 4, Mythic = 1 },
+	-- Pity / guaranteed-rare eggs roll from this table instead.
+	RareGuaranteedWeights = { Rare = 70, Epic = 20, Legendary = 8, Mythic = 2 },
+	Species = { "Egglings", "Shellbeast", "Yolkling", "Chirp", "Ovodile", "Scramble" },
+	Sizes = { "Small", "Medium", "Large", "Giant" },
+	MutationChance = 0.1,        -- 10% of pets hatch with a mutation
+	Mutations = { "Golden", "Neon", "Void", "Rainbow", "Crystal" },
+	-- Grip = % chance to HOLD ON when a punch would knock the egg loose.
+	-- Intentionally tiny and capped: a Mythic pet is ~3% luckier, not stronger.
+	GripByRarity = { Common = 0.5, Rare = 1, Epic = 1.5, Legendary = 2, Mythic = 3 },
+	MaxGripBonus = 3,
+	MaxEquipped = 1,             -- trading/multi-equip comes later
+}
+
+--------------------------------------------------------------------------
+-- Bots (BotService) -- fill empty slots so matches start with <6 humans.
+--------------------------------------------------------------------------
+Config.Bots = {
+	Enabled = true,
+	FillToMaxPlayers = true,     -- top every match up to Config.MaxPlayers
+	MaxBots = 5,
+	LobbyGraceSeconds = 8,       -- lobby waits this long for humans, then fills with bots
+	TickRate = 5,                -- AI decisions per second (per bot)
+	WalkSpeed = 14,              -- slower than humans (16): beatable
+	CarrySpeed = 11,             -- slower than humans carrying (12)
+	ReactionTime = 0.35,         -- min seconds between decisions: beatable
+	AttackRange = 6,             -- punch reach (slightly generous: not useless)
+	AttackCooldown = 1.1,        -- vs human 0.6: beatable
+	PunchKnockback = 20,         -- vs human 25: bot hits are softer
+	PunchUpward = 6,
+	Aggression = 0.55,           -- 0..1: how often a hunting bot commits to a punch
+	ThrowChance = 0.25,          -- chance per decision to throw while carrying & hunted
+	ThrowRange = 25,             -- enemies within this range tempt a throw
+	RoamRetargetSeconds = 3,     -- carriers pick a fresh random spot this often
+	StunTime = 0.4,              -- stagger when a bot gets punched
+	RespawnY = -30,              -- knocked out of the arena -> respawn on the ring
+	Elo = 900,                   -- skill hint used by matchmaking display only
+	Names = { "Rex", "Kev", "Ziggy", "Nova", "Bolt", "Mochi", "Turbo", "Pixel" },
+	Colors = { "Bright red", "Bright blue", "Bright green", "Bright yellow",
+		"Bright violet", "Bright orange", "Cyan", "Lime green" },
+}
+
+--------------------------------------------------------------------------
+-- Matchmaking (MatchmakingService) -- in-server ELO queue.
+--------------------------------------------------------------------------
+-- The server gathers up to 6 players for the next match, preferring similar
+-- ELO. If the queue is slow the acceptable range widens over time; after
+-- MaxWaitSeconds it takes the closest available players regardless.
+Config.Matchmaking = {
+	DefaultElo = 1000,
+	MinElo = 100,
+	MaxElo = 3000,
+	BaseRange = 150,             -- starting ELO window around the queue seed
+	MaxRange = 1000,
+	WidenPerSecond = 25,         -- window grows while the seed waits
+	MaxWaitSeconds = 20,         -- after this, force-fill with whoever is closest
+	EloByRank = { 25, 12, 4, -4, -12, -20 }, -- rank 1..6 delta after a match
+}
+
+--------------------------------------------------------------------------
+-- Anti-cheat (AntiCheatService) -- server-side validation & speed-hack net.
+--------------------------------------------------------------------------
+-- Ability requests are ALREADY validated by CombatService (cooldown,
+-- stamina, contextual egg rule, server-computed ranges/targets -- no client
+-- position is ever trusted). This adds:
+--   * horizontal speed sampling: faster than the max legitimate speed
+--     (walk + sprint + dash + tolerance) for several consecutive samples
+--     -> teleport back to the last valid position, log, strike.
+--   * ability-request rate limiting (remote spam) -> strike.
+--   * MaxStrikes -> kick.
+Config.AntiCheat = {
+	Enabled = true,
+	SampleRate = 10,             -- position samples per second per player
+	SpeedTolerance = 10,         -- studs/s of slack above the max legitimate speed
+	ConsecutiveSamples = 3,      -- fast samples in a row before acting
+	MaxStrikes = 5,
+	SpawnGraceSeconds = 2,       -- ignore movement right after (re)spawn
+	MaxAbilityRequestsPerSecond = 15,
+	LogViolations = true,
+}
+
+--------------------------------------------------------------------------
+-- Private servers (VIP servers)
+--------------------------------------------------------------------------
+-- Friends-only servers start faster: 1 human is enough (bots fill the rest)
+-- with a shorter grace window for friends to trickle in.
+Config.PrivateServers = {
+	Enabled = true,
+	MinPlayersToStart = 1,
+	BotGraceSeconds = 3,
+}
+
+--------------------------------------------------------------------------
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
@@ -469,16 +606,938 @@ return Config
 </Item>
 <Item class="RemoteEvent" referent="RBX33">
 <Properties>
+	<string name="Name">MatchRewards</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX34">
+<Properties>
+	<string name="Name">HatcheryRequest</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX35">
+<Properties>
+	<string name="Name">HatcheryUpdated</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX36">
+<Properties>
 	<string name="Name">DebugCommand</string>
 </Properties>
 </Item>
 </Item>
 </Item>
-<Item class="ServerScriptService" referent="RBX34">
+<Item class="ServerScriptService" referent="RBX37">
 <Properties>
 	<string name="Name">ServerScriptService</string>
 </Properties>
-<Item class="ModuleScript" referent="RBX35">
+<Item class="ModuleScript" referent="RBX38">
+<Properties>
+	<string name="Name">AntiCheatService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	AntiCheatService (ServerScriptService.AntiCheatService)
+	=======================================================
+	Server-side cheat resistance. Two layers:
+
+	1) ABILITY VALIDATION (already lives in CombatService, restated here):
+	   every Request* remote handler ignores client arguments entirely and
+	   re-checks context (egg possession), cooldown, stamina, stun and
+	   server-computed ranges/targets. Client positions are NEVER trusted,
+	   so impossible attack ranges cannot land: a punch only hits what the
+	   SERVER sees inside Config.AttackRange of the SERVER's attacker
+	   position. On top of that this service rate-limits remote spam.
+
+	2) SPEED-HACK DETECTION:
+	   Each player's position is sampled Config.AntiCheat.SampleRate times
+	   per second. The maximum LEGITIMATE horizontal speed is
+	     WalkSpeed + SprintSpeedBonus + DashSpeedBonus + SpeedTolerance.
+	   (Knockback impulses top out far below that; jumps are vertical and
+	   ignored; spawns/respawns get SpawnGraceSeconds of amnesty.)
+	   If a player exceeds it for ConsecutiveSamples samples in a row they
+	   are teleported back to their last valid position, the violation is
+	   logged, and a strike is recorded. MaxStrikes -> kick.
+
+	CombatService calls AllowAbilityRequest() at the top of every Request
+	handler; everything else runs on its own sampler loop.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
+local AntiCheatService = {}
+
+local trackers = {} -- { [Player] = tracker }
+local initialized = false
+
+local function now()
+	return os.clock()
+end
+
+local function maxLegitimateSpeed()
+	return Config.WalkSpeed + Config.SprintSpeedBonus + Config.DashSpeedBonus
+		+ Config.AntiCheat.SpeedTolerance
+end
+
+local function log(player, message)
+	if Config.AntiCheat.LogViolations then
+		warn(("[AntiCheat] %s: %s"):format(player.Name, message))
+	end
+end
+
+local function strike(player, reason)
+	local tracker = trackers[player]
+	if not tracker then
+		return
+	end
+	tracker.strikes = tracker.strikes + 1
+	log(player, ("STRIKE %d/%d (%s)"):format(
+		tracker.strikes, Config.AntiCheat.MaxStrikes, reason))
+	if tracker.strikes >= Config.AntiCheat.MaxStrikes then
+		pcall(function()
+			player:Kick("[AntiCheat] Too many movement/ability violations (" .. reason .. ")")
+		end)
+	end
+end
+
+local function newTracker()
+	return {
+		lastPosition = nil,
+		lastValidPosition = nil,
+		lastSampleTime = 0,
+		fastStreak = 0,
+		graceUntil = 0,
+		strikes = 0,
+		requestTimes = {}, -- sliding window for ability spam
+	}
+end
+
+local function getTracker(player)
+	local tracker = trackers[player]
+	if not tracker then
+		tracker = newTracker()
+		trackers[player] = tracker
+	end
+	return tracker
+end
+
+---------------------------------------------------------------------------
+-- Sampler
+---------------------------------------------------------------------------
+
+local function samplePlayer(player, tracker, currentTime)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or humanoid.Health <= 0 or not root then
+		return
+	end
+	if currentTime < tracker.graceUntil then
+		-- Spawn/respawn amnesty: just re-anchor our notion of "valid".
+		tracker.lastValidPosition = root.Position
+		tracker.lastPosition = root.Position
+		tracker.lastSampleTime = currentTime
+		tracker.fastStreak = 0
+		return
+	end
+
+	if tracker.lastPosition == nil or tracker.lastSampleTime == 0 then
+		tracker.lastPosition = root.Position
+		tracker.lastValidPosition = root.Position
+		tracker.lastSampleTime = currentTime
+		return
+	end
+
+	local dt = currentTime - tracker.lastSampleTime
+	tracker.lastSampleTime = currentTime
+	tracker.lastPosition = root.Position
+	if dt <= 0 or dt > 0.5 then
+		return -- server hitch or first tick: never judge these
+	end
+
+	-- Horizontal-only: jumps/knockback pops are vertical and legitimate.
+	local delta = root.Position - tracker.lastValidPosition
+	local horizontal = Vector3.new(delta.X, 0, delta.Z).Magnitude
+	-- Measured against the LAST VALID position over the whole streak window,
+	-- so brief legit bursts (dash momentum decay) self-clear.
+	local window = currentTime - (tracker.validSince or currentTime)
+	if window < dt then
+		window = dt
+	end
+	local allowed = maxLegitimateSpeed() * window
+
+	if horizontal > allowed then
+		tracker.fastStreak = tracker.fastStreak + 1
+		if tracker.fastStreak >= Config.AntiCheat.ConsecutiveSamples then
+			local speed = horizontal / window
+			log(player, ("speed violation: %.1f studs/s sustained (max legitimate %.1f) -> teleporting back")
+				:format(speed, maxLegitimateSpeed()))
+			-- Teleport back to the last valid position.
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.CFrame = CFrame.new(tracker.lastValidPosition + Vector3.new(0, 1, 0))
+			strike(player, "speed hack suspected")
+			tracker.fastStreak = 0
+			tracker.lastPosition = root.Position
+			tracker.validSince = currentTime
+		end
+	else
+		tracker.fastStreak = 0
+		tracker.lastValidPosition = root.Position
+		tracker.validSince = currentTime
+	end
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+-- CombatService calls this at the top of EVERY Request* handler.
+-- Returns false when the player is spamming (request dropped + strike).
+function AntiCheatService.AllowAbilityRequest(player)
+	if not Config.AntiCheat.Enabled then
+		return true
+	end
+	local tracker = getTracker(player)
+	local currentTime = now()
+
+	-- Sliding 1-second window.
+	local window = tracker.requestTimes
+	while #window > 0 and currentTime - window[1] > 1 do
+		table.remove(window, 1)
+	end
+	table.insert(window, currentTime)
+	if #window > Config.AntiCheat.MaxAbilityRequestsPerSecond then
+		log(player, ("ability spam: %d requests in 1s (max %d)")
+			:format(#window, Config.AntiCheat.MaxAbilityRequestsPerSecond))
+		tracker.requestTimes = {}
+		strike(player, "remote spam")
+		return false
+	end
+	return true
+end
+
+-- Called by anything that legally teleports/impulses a player (spawns).
+function AntiCheatService.GiveGrace(player, seconds)
+	local tracker = getTracker(player)
+	tracker.graceUntil = now() + (seconds or Config.AntiCheat.SpawnGraceSeconds)
+	tracker.fastStreak = 0
+end
+
+function AntiCheatService.GetStrikes(player)
+	local tracker = trackers[player]
+	return tracker and tracker.strikes or 0
+end
+
+function AntiCheatService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	Players.PlayerAdded:Connect(function(player)
+		trackers[player] = newTracker()
+		player.CharacterAdded:Connect(function()
+			AntiCheatService.GiveGrace(player, Config.AntiCheat.SpawnGraceSeconds)
+		end)
+		if player.Character then
+			AntiCheatService.GiveGrace(player, Config.AntiCheat.SpawnGraceSeconds)
+		end
+	end)
+	Players.PlayerRemoving:Connect(function(player)
+		trackers[player] = nil
+	end)
+	for _, player in ipairs(Players:GetPlayers()) do
+		trackers[player] = newTracker()
+		player.CharacterAdded:Connect(function()
+			AntiCheatService.GiveGrace(player, Config.AntiCheat.SpawnGraceSeconds)
+		end)
+		if player.Character then
+			AntiCheatService.GiveGrace(player, Config.AntiCheat.SpawnGraceSeconds)
+		end
+	end
+
+	if Config.AntiCheat.Enabled then
+		task.spawn(function()
+			local interval = 1 / Config.AntiCheat.SampleRate
+			while initialized do
+				local currentTime = now()
+				for _, player in ipairs(Players:GetPlayers()) do
+					local tracker = trackers[player]
+					if tracker then
+						samplePlayer(player, tracker, currentTime)
+					end
+				end
+				task.wait(interval)
+			end
+		end)
+	end
+
+	print("[AntiCheatService] Initialized: " .. (Config.AntiCheat.Enabled
+		and ("speed sampling %dHz, tolerance +%d, %d strikes -> kick")
+			:format(Config.AntiCheat.SampleRate, Config.AntiCheat.SpeedTolerance,
+				Config.AntiCheat.MaxStrikes)
+		or "DISABLED"))
+end
+
+function AntiCheatService.DebugState()
+	local parts = {}
+	for player, tracker in pairs(trackers) do
+		if player.Parent and tracker.strikes > 0 then
+			table.insert(parts, ("%s[strikes=%d]"):format(player.Name, tracker.strikes))
+		end
+	end
+	return ("enabled=%s maxSpeed=%.0f%s"):format(
+		tostring(Config.AntiCheat.Enabled), maxLegitimateSpeed(),
+		#parts > 0 and (" | " .. table.concat(parts, ", ")) or "")
+end
+
+return AntiCheatService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX39">
+<Properties>
+	<string name="Name">BotRegistry</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	BotRegistry (ServerScriptService.BotRegistry)
+	=============================================
+	Dependency-free shared roster of "participants": real Players + bot
+	Models (built by BotService). Every gameplay service requires THIS
+	module instead of BotService, which keeps the require graph acyclic
+	(BotService needs Combat/Egg; Combat/Egg need only the registry).
+
+	A bot is a plain Model (R6 rig) with a Humanoid, living in
+	Workspace.Bots. Models support attributes, so bots carry the same
+	replicated "HasEgg" attribute as players and can be sent through
+	RemoteEvents (clients see them because Workspace replicates).
+
+	Also holds two cross-service hooks so nobody has to require anybody:
+	  * knockHandler  -- BotService installs the real bot-knockback logic
+	  * allowedFilter -- MatchService limits a match to its chosen roster
+	                     (relevant only when >6 humans are in the server)
+]]
+
+local Players = game:GetService("Players")
+
+local BotRegistry = {}
+
+local bots = {}          -- { [Model] = info }  info = { UserId = fake id }
+local knockHandler = nil -- function(model, direction, force, upward, stunTime)
+local allowedFilter = nil -- function(player) -> bool (nil = everyone allowed)
+
+function BotRegistry.Register(model, fakeUserId)
+	bots[model] = { UserId = fakeUserId }
+end
+
+function BotRegistry.Unregister(model)
+	bots[model] = nil
+end
+
+function BotRegistry.IsBot(instance)
+	return instance ~= nil and bots[instance] ~= nil
+end
+
+-- Character-equivalent for any participant: a player's Character, or the
+-- bot Model itself.
+function BotRegistry.GetCharacter(entity)
+	if entity == nil then
+		return nil
+	end
+	if entity:IsA("Player") then
+		return entity.Character
+	end
+	if BotRegistry.IsBot(entity) then
+		return entity
+	end
+	return nil
+end
+
+function BotRegistry.GetUserId(entity)
+	if entity == nil then
+		return nil
+	end
+	if entity:IsA("Player") then
+		return entity.UserId
+	end
+	local info = bots[entity]
+	return info and info.UserId or nil
+end
+
+-- True when a bot's Model is the given character (EggService touch events).
+function BotRegistry.GetBotFromCharacter(character)
+	for model in pairs(bots) do
+		if model == character then
+			return model
+		end
+	end
+	return nil
+end
+
+-- Live bots (Parent check scrubs despawned models).
+function BotRegistry.GetBots()
+	local list = {}
+	for model in pairs(bots) do
+		if model.Parent then
+			table.insert(list, model)
+		else
+			bots[model] = nil
+		end
+	end
+	return list
+end
+
+function BotRegistry.CountBots()
+	local count = 0
+	for model in pairs(bots) do
+		if model.Parent then
+			count = count + 1
+		else
+			bots[model] = nil
+		end
+	end
+	return count
+end
+
+-- Every participant allowed to touch the egg / be hit / be scored right now.
+function BotRegistry.GetParticipants()
+	local list = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		if not allowedFilter or allowedFilter(player) then
+			table.insert(list, player)
+		end
+	end
+	for _, model in ipairs(BotRegistry.GetBots()) do
+		table.insert(list, model)
+	end
+	return list
+end
+
+function BotRegistry.IsParticipant(entity)
+	if entity == nil then
+		return false
+	end
+	if entity:IsA("Player") then
+		return (not allowedFilter or allowedFilter(entity)) and entity.Parent ~= nil
+	end
+	return bots[entity] ~= nil and entity.Parent ~= nil
+end
+
+-- MatchService sets this while a match runs (nil = no filtering).
+function BotRegistry.SetAllowedFilter(fn)
+	allowedFilter = (typeof(fn) == "function") and fn or nil
+end
+
+-- BotService installs the real knockback implementation here; CombatService
+-- and EggService call through without requiring BotService.
+function BotRegistry.SetKnockHandler(fn)
+	knockHandler = (typeof(fn) == "function") and fn or nil
+end
+
+-- Returns "Hit" | "Invalid" (bots cannot block or i-frame).
+function BotRegistry.KnockbackBot(model, direction, force, upward, stunTime)
+	if not BotRegistry.IsBot(model) or not knockHandler then
+		return "Invalid"
+	end
+	return knockHandler(model, direction, force, upward, stunTime)
+end
+
+return BotRegistry
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX40">
+<Properties>
+	<string name="Name">BotService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	BotService (ServerScriptService.BotService)
+	===========================================
+	Simple AI bots that fill empty slots so a match always has a full party
+	(deliverable: a lone player starts a match and gets 5 bots).
+
+	A bot is a code-built R6 rig (Model + Humanoid) registered in
+	BotRegistry, so EggService/CombatService/ScoringService treat it as a
+	normal participant: it touches the egg to pick it up, accrues hold time,
+	can win rounds and even be MVP. Bots have NO data profile -> they earn
+	no Clout/fragments.
+
+	Behaviour (spec: walk toward the egg, pick it up, run to a random spot,
+	punch nearby players, sometimes throw; beatable but not useless):
+	  * egg loose/respawning -> walk to it (touch/proximity pickup is the
+	    regular EggService path)
+	  * carrying             -> roam to random spots, re-targeting every
+	    RoamRetargetSeconds; if an enemy is close, sometimes THROW at them
+	  * someone else carries -> hunt the carrier (Aggression chance per
+	    decision, so hunting is not relentless); inside AttackRange and off
+	    cooldown -> punch (softer + slower than a human: beatable)
+	  * punched              -> stagger (StunTime), knockback applied
+
+	Tunable entirely from Config.Bots; Enabled=false turns the whole system
+	off (matches then need Config.MinPlayersToStart humans, as before).
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local Workspace = game:GetService("Workspace")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local EggService = require(ServerScriptService:WaitForChild("EggService"))
+local CombatService = require(ServerScriptService:WaitForChild("CombatService"))
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
+
+local BotService = {}
+
+local botsFolder = nil
+local aiBots = {}        -- { {model, humanoid, root, ...ai state} }
+local botIdCounter = 0
+local initialized = false
+
+local function now()
+	return os.clock()
+end
+
+local function broadcastFeedback(kind, data)
+	FeedbackEvent:FireAllClients(kind, data or {})
+end
+
+---------------------------------------------------------------------------
+-- R6 rig builder (pure code -- no Toolbox assets needed)
+---------------------------------------------------------------------------
+
+local function makePart(name, size, color, parent)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = size
+	part.Color = color
+	part.Material = Enum.Material.SmoothPlastic
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.CanCollide = true
+	part.Parent = parent
+	return part
+end
+
+local function makeMotor(name, part0, part1, c0, c1, parent)
+	local motor = Instance.new("Motor6D")
+	motor.Name = name
+	motor.Part0 = part0
+	motor.Part1 = part1
+	motor.C0 = c0
+	motor.C1 = c1
+	motor.Parent = parent
+	return motor
+end
+
+local function buildRig(displayName, bodyColor, legColor)
+	local model = Instance.new("Model")
+	model.Name = "Bot_" .. displayName
+
+	local root = makePart("HumanoidRootPart", Vector3.new(2, 2, 1), bodyColor, model)
+	root.Transparency = 1
+	root.CanCollide = false
+
+	local torso = makePart("Torso", Vector3.new(2, 2, 1), bodyColor, model)
+	local head = makePart("Head", Vector3.new(2, 1, 1), bodyColor, model)
+	local leftArm = makePart("Left Arm", Vector3.new(1, 2, 1), bodyColor, model)
+	local rightArm = makePart("Right Arm", Vector3.new(1, 2, 1), bodyColor, model)
+	local leftLeg = makePart("Left Leg", Vector3.new(1, 2, 1), legColor, model)
+	local rightLeg = makePart("Right Leg", Vector3.new(1, 2, 1), legColor, model)
+
+	-- Canonical R6 layout around the root at origin.
+	torso.CFrame = root.CFrame
+	head.CFrame = root.CFrame * CFrame.new(0, 1.5, 0)
+	leftArm.CFrame = root.CFrame * CFrame.new(-1.5, 0, 0)
+	rightArm.CFrame = root.CFrame * CFrame.new(1.5, 0, 0)
+	leftLeg.CFrame = root.CFrame * CFrame.new(-0.5, -2, 0)
+	rightLeg.CFrame = root.CFrame * CFrame.new(0.5, -2, 0)
+
+	-- Classic smiley face (built-in Roblox texture, no upload needed).
+	local face = Instance.new("Decal")
+	face.Name = "face"
+	face.Texture = "rbxasset://textures/face.png"
+	face.Face = Enum.NormalId.Front
+	face.Parent = head
+
+	-- Standard R6 joints.
+	makeMotor("RootJoint", root, torso,
+		CFrame.new(0, 0, 0) * CFrame.Angles(-math.pi / 2, math.pi, 0),
+		CFrame.new(0, 0, 0), torso)
+	makeMotor("Neck", torso, head,
+		CFrame.new(0, 1, 0) * CFrame.Angles(-math.pi / 2, math.pi, 0),
+		CFrame.new(0, -0.5, 0), torso)
+	makeMotor("Left Shoulder", torso, leftArm,
+		CFrame.new(-1, 0.5, 0) * CFrame.Angles(0, -math.pi / 2, 0),
+		CFrame.new(0.5, 0.5, 0), torso)
+	makeMotor("Right Shoulder", torso, rightArm,
+		CFrame.new(1, 0.5, 0) * CFrame.Angles(0, math.pi / 2, 0),
+		CFrame.new(-0.5, 0.5, 0), torso)
+	makeMotor("Left Hip", torso, leftLeg,
+		CFrame.new(-1, -1, 0) * CFrame.Angles(0, -math.pi / 2, 0),
+		CFrame.new(-0.5, 1, 0), torso)
+	makeMotor("Right Hip", torso, rightLeg,
+		CFrame.new(1, -1, 0) * CFrame.Angles(0, math.pi / 2, 0),
+		CFrame.new(0.5, 1, 0), torso)
+
+	local humanoid = Instance.new("Humanoid")
+	humanoid.RigType = Enum.HumanoidRigType.R6
+	humanoid.DisplayName = displayName
+	humanoid.WalkSpeed = Config.Bots.WalkSpeed
+	humanoid.JumpPower = 0 -- bots do not jump (keeps the AI simple + beatable)
+	humanoid.MaxHealth = 100
+	humanoid.Health = 100
+	humanoid.Parent = model
+
+	model.PrimaryPart = root
+	return model, humanoid, root
+end
+
+---------------------------------------------------------------------------
+-- Spawn / despawn
+---------------------------------------------------------------------------
+
+local function randomArenaPoint(radius)
+	local angle = math.random() * math.pi * 2
+	local distance = math.random() * (radius or 45)
+	return Vector3.new(math.cos(angle) * distance, 4, math.sin(angle) * distance)
+end
+
+function BotService.SpawnBots(count)
+	if not Config.Bots.Enabled or count <= 0 then
+		return {}
+	end
+	count = math.min(count, Config.Bots.MaxBots)
+	if not botsFolder then
+		botsFolder = Workspace:FindFirstChild("Bots")
+		if not botsFolder then
+			botsFolder = Instance.new("Folder")
+			botsFolder.Name = "Bots"
+			botsFolder.Parent = Workspace
+		end
+	end
+
+	-- Shuffle name/color pools so parties vary.
+	local names = {}
+	for _, name in ipairs(Config.Bots.Names) do
+		table.insert(names, name)
+	end
+	for index = #names, 2, -1 do
+		local swap = math.random(1, index)
+		names[index], names[swap] = names[swap], names[index]
+	end
+
+	local spawned = {}
+	for index = 1, count do
+		botIdCounter = botIdCounter + 1
+		local displayName = names[((index - 1) % #names) + 1]
+		local colorName = Config.Bots.Colors[(botIdCounter % #Config.Bots.Colors) + 1]
+		local bodyColor = BrickColor.new(colorName).Color
+		local legColor = BrickColor.new("Dark stone grey").Color
+
+		local model, humanoid, root = buildRig(displayName, bodyColor, legColor)
+		model.Parent = botsFolder
+		model:PivotTo(CFrame.new(randomArenaPoint(Config.ArenaSpawnRadius)))
+
+		BotRegistry.Register(model, -(9000 + botIdCounter)) -- fake negative UserId
+		table.insert(spawned, model)
+
+		table.insert(aiBots, {
+			model = model,
+			humanoid = humanoid,
+			root = root,
+			nextDecisionAt = now() + math.random() * Config.Bots.ReactionTime,
+			stunUntil = 0,
+			lastAttackAt = -math.huge,
+			roamTarget = nil,
+			roamRetargetAt = 0,
+		})
+
+		-- Bots broadcast possession/feedback through the normal remotes:
+		-- models replicate, so clients can render bot carriers and events.
+		humanoid:SetAttribute("IsBot", true)
+	end
+
+	if Config.DebugVerboseLogging and count > 0 then
+		print(("[BotService] spawned %d bot(s) -- arena now has %d participant(s)")
+			:format(#spawned, #BotRegistry.GetParticipants()))
+	end
+	return spawned
+end
+
+function BotService.DespawnAll()
+	for _, bot in ipairs(aiBots) do
+		if EggService.GetCarrier() == bot.model then
+			EggService.Fumble(bot.model, "BotDespawned")
+		end
+		BotRegistry.Unregister(bot.model)
+		bot.model:Destroy()
+	end
+	aiBots = {}
+	if Config.DebugVerboseLogging then
+		print("[BotService] all bots despawned")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Bot knockback (installed into BotRegistry; CombatService/EggService call)
+---------------------------------------------------------------------------
+
+local function knockBot(model, direction, force, upward, stunTime)
+	for _, bot in ipairs(aiBots) do
+		if bot.model == model then
+			local flat = Vector3.new(direction.X, 0, direction.Z)
+			if flat.Magnitude < 0.001 then
+				flat = Vector3.new(0, 0, 1)
+			end
+			bot.root.AssemblyLinearVelocity =
+				Vector3.new(flat.Unit.X * force, upward or 0, flat.Unit.Z * force)
+			bot.stunUntil = now() + (stunTime or Config.Bots.StunTime)
+			return "Hit"
+		end
+	end
+	return "Invalid"
+end
+
+function BotService.IsStunned(model)
+	for _, bot in ipairs(aiBots) do
+		if bot.model == model then
+			return now() < bot.stunUntil
+		end
+	end
+	return false
+end
+
+---------------------------------------------------------------------------
+-- AI
+---------------------------------------------------------------------------
+
+local function getRootOf(entity)
+	local character = BotRegistry.GetCharacter(entity)
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+-- Bot punch: mirror of the player attack, softer + slower (Config.Bots).
+local function botPunch(bot)
+	bot.lastAttackAt = now()
+	broadcastFeedback("PunchSwing", { Player = bot.model, Position = bot.root.Position })
+
+	local look = bot.root.CFrame.LookVector
+	local lookFlat = Vector3.new(look.X, 0, look.Z)
+	if lookFlat.Magnitude > 0.001 then
+		lookFlat = lookFlat.Unit
+	else
+		lookFlat = nil
+	end
+
+	local carrier = EggService.GetCarrier()
+	for _, victim in ipairs(BotRegistry.GetParticipants()) do
+		if victim ~= bot.model then
+			local victimRoot = getRootOf(victim)
+			if victimRoot then
+				local offset = victimRoot.Position - bot.root.Position
+				if offset.Magnitude <= Config.Bots.AttackRange then
+					local pushDir = Vector3.new(offset.X, 0, offset.Z)
+					if pushDir.Magnitude < 0.001 then
+						pushDir = lookFlat or Vector3.new(0, 0, 1)
+					end
+					pushDir = pushDir.Unit
+					if (lookFlat == nil) or (lookFlat:Dot(pushDir) >= Config.AttackFacingDot) then
+						local result
+						if victim:IsA("Player") then
+							result = CombatService.ApplyKnockback(
+								victim, pushDir,
+								Config.Bots.PunchKnockback, Config.Bots.PunchUpward,
+								Config.AttackHitstun)
+						else
+							result = BotRegistry.KnockbackBot(
+								victim, pushDir,
+								Config.Bots.PunchKnockback, Config.Bots.PunchUpward,
+								Config.Bots.StunTime)
+						end
+						broadcastFeedback("PunchHit", {
+							Attacker = bot.model,
+							Victim = victim,
+							Position = victimRoot.Position,
+							Result = result,
+						})
+						if victim == carrier and result == "Hit" then
+							CombatService.AttemptSteal(bot.model, victim, pushDir)
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+local function nearestEnemy(bot)
+	local best, bestDistance = nil, math.huge
+	for _, entity in ipairs(BotRegistry.GetParticipants()) do
+		if entity ~= bot.model then
+			local root = getRootOf(entity)
+			if root then
+				local distance = (root.Position - bot.root.Position).Magnitude
+				if distance < bestDistance then
+					best, bestDistance = entity, distance
+				end
+			end
+		end
+	end
+	return best, bestDistance
+end
+
+local function decide(bot)
+	local carrier = EggService.GetCarrier()
+	local egg = EggService.GetEgg()
+	local eggState = EggService.GetState()
+
+	if carrier == bot.model then
+		-- CARRYING: run to random spots; sometimes throw when hunted.
+		local enemy, enemyDistance = nearestEnemy(bot)
+		if enemy and enemyDistance <= Config.Bots.ThrowRange
+			and math.random() < Config.Bots.ThrowChance
+		then
+			local enemyRoot = getRootOf(enemy)
+			if enemyRoot then
+				local direction = enemyRoot.Position - bot.root.Position
+				direction = Vector3.new(direction.X, 0, direction.Z)
+				if direction.Magnitude > 0.001 then
+					-- Slight spread: bots are not snipers.
+					direction = direction.Unit * 1.0
+					direction = direction + Vector3.new(
+						(math.random() - 0.5) * 0.4, 0, (math.random() - 0.5) * 0.4)
+					EggService.ReleaseThrow(bot.model, direction)
+					bot.roamTarget = nil
+					return
+				end
+			end
+		end
+		if not bot.roamTarget or now() >= bot.roamRetargetAt then
+			bot.roamTarget = randomArenaPoint(45)
+			bot.roamRetargetAt = now() + Config.Bots.RoamRetargetSeconds
+		end
+		bot.humanoid:MoveTo(bot.roamTarget)
+
+	elseif carrier ~= nil then
+		-- SOMEONE ELSE CARRIES: hunt them (not every tick -- beatable).
+		local carrierRoot = getRootOf(carrier)
+		if carrierRoot then
+			if math.random() < Config.Bots.Aggression then
+				bot.humanoid:MoveTo(carrierRoot.Position)
+				local distance = (carrierRoot.Position - bot.root.Position).Magnitude
+				if distance <= Config.Bots.AttackRange
+					and now() >= bot.lastAttackAt + Config.Bots.AttackCooldown
+				then
+					botPunch(bot)
+				end
+			else
+				-- Mill around near the carrier instead of beelining.
+				if not bot.roamTarget or now() >= bot.roamRetargetAt then
+					bot.roamTarget = carrierRoot.Position + randomArenaPoint(14)
+					bot.roamRetargetAt = now() + Config.Bots.RoamRetargetSeconds
+				end
+				bot.humanoid:MoveTo(bot.roamTarget)
+			end
+		end
+
+	else
+		-- EGG LOOSE / RESPAWNING: go get it (or wait near center).
+		bot.roamTarget = nil
+		if egg and eggState == "Loose" then
+			bot.humanoid:MoveTo(egg.Position)
+		else
+			bot.humanoid:MoveTo(Vector3.new(
+				(math.random() - 0.5) * 16, 0, (math.random() - 0.5) * 16))
+		end
+	end
+end
+
+local function tickBots()
+	local currentTime = now()
+	for index = #aiBots, 1, -1 do
+		local bot = aiBots[index]
+		if not bot.model.Parent then
+			table.remove(aiBots, index) -- despawned elsewhere
+		elseif bot.root.Position.Y < Config.Bots.RespawnY then
+			-- Knocked out of the arena: pop back onto the ring.
+			bot.model:PivotTo(CFrame.new(randomArenaPoint(Config.ArenaSpawnRadius)))
+			bot.root.AssemblyLinearVelocity = Vector3.zero
+			bot.stunUntil = currentTime + Config.Bots.StunTime
+		elseif currentTime < bot.stunUntil then
+			bot.humanoid.WalkSpeed = 0 -- staggered
+		else
+			if bot.humanoid.WalkSpeed < 0.5 then
+				bot.humanoid.WalkSpeed = (EggService.GetCarrier() == bot.model)
+					and Config.Bots.CarrySpeed or Config.Bots.WalkSpeed
+			end
+			if currentTime >= bot.nextDecisionAt then
+				bot.nextDecisionAt = currentTime + Config.Bots.ReactionTime
+					+ math.random() * 0.15
+				local ok, err = pcall(decide, bot)
+				if not ok then
+					warn("[BotService] AI error: " .. tostring(err))
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Init
+---------------------------------------------------------------------------
+
+function BotService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	BotRegistry.SetKnockHandler(knockBot)
+
+	task.spawn(function()
+		while initialized do
+			tickBots()
+			task.wait(1 / Config.Bots.TickRate)
+		end
+	end)
+
+	print("[BotService] Initialized: " .. (Config.Bots.Enabled
+		and ("bots ENABLED (fill to %d, grace %ds)")
+			:format(Config.MaxPlayers, Config.Bots.LobbyGraceSeconds)
+		or "bots DISABLED"))
+end
+
+function BotService.GetBots()
+	return BotRegistry.GetBots()
+end
+
+function BotService.DebugState()
+	local parts = {}
+	for _, bot in ipairs(aiBots) do
+		if bot.model.Parent then
+			local flags = {}
+			if EggService.GetCarrier() == bot.model then
+				table.insert(flags, "CARRYING")
+			end
+			if now() < bot.stunUntil then
+				table.insert(flags, "stunned")
+			end
+			table.insert(parts, bot.model.Name
+				.. (#flags > 0 and ("[" .. table.concat(flags, "+") .. "]") or ""))
+		end
+	end
+	return ("bots=%d%s"):format(#parts, #parts > 0 and (" (" .. table.concat(parts, ", ") .. ")") or "")
+end
+
+return BotService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX41">
 <Properties>
 	<string name="Name">CombatService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -544,6 +1603,9 @@ local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("C
 -- One-directional dependency: CombatService may use EggService, never the
 -- reverse (EggService calls back through the injected impact handler).
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
+local AntiCheatService = require(ServerScriptService:WaitForChild("AntiCheatService"))
+local HatcheryService = require(ServerScriptService:WaitForChild("HatcheryService"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
@@ -603,8 +1665,9 @@ end
 -- Small helpers
 ---------------------------------------------------------------------------
 
-local function getAliveCharacter(player)
-	local character = player.Character
+local function getAliveCharacter(entity)
+	-- Entity-aware: Players use their Character; bot Models ARE the character.
+	local character = BotRegistry.GetCharacter(entity)
 	if not character then
 		return nil
 	end
@@ -615,12 +1678,21 @@ local function getAliveCharacter(player)
 	return character
 end
 
-local function getRoot(player)
-	local character = player.Character
+local function getRoot(entity)
+	local character = BotRegistry.GetCharacter(entity)
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
+-- Server-side mirror of every feedback event (EconomyService listens).
+local serverFeedback = nil
+
 local function broadcastFeedback(kind, data)
+	if serverFeedback == nil then
+		serverFeedback = ServerScriptService:FindFirstChild("ServerFeedback") or false
+	end
+	if serverFeedback then
+		serverFeedback:Fire(kind, data or {})
+	end
 	FeedbackEvent:FireAllClients(kind, data or {})
 end
 
@@ -744,10 +1816,62 @@ function CombatService.ApplyKnockback(player, direction, force, upwardForce, stu
 end
 
 ---------------------------------------------------------------------------
+-- Steal attempt (shared by player punches AND bot punches)
+---------------------------------------------------------------------------
+
+--[[
+	CombatService.AttemptSteal(attacker, victim, pushDir)
+	  attacker/victim : Player or bot Model (victim must be the carrier)
+	  pushDir         : horizontal push direction for the knock-loose pop
+
+	Pets get their moment here: the victim's EQUIPPED pet grants a tiny
+	capped grip chance (Config.Pets.GripByRarity, max MaxGripBonus %) to
+	HOLD ON through the punch. Save = "GripSave" feedback (big flex), no
+	fumble. Otherwise the egg pops loose and "EggStolen" fires.
+	Returns true when the egg came loose.
+]]
+function CombatService.AttemptSteal(attacker, victim, pushDir)
+	if EggService.GetCarrier() ~= victim then
+		return false
+	end
+
+	local grip = HatcheryService.GetGripBonus(victim)
+	if grip > 0 and math.random() * 100 < grip then
+		broadcastFeedback("GripSave", { Player = victim, Attacker = attacker })
+		if victim:IsA("Player") then
+			rejectClient(victim, "GripSave", { Ability = "Grip", ByPet = true })
+		end
+		if Config.DebugVerboseLogging then
+			print(("[CombatService] %s's pet GRIPPED the egg (%.1f%% save)"):format(
+				victim.Name, grip))
+		end
+		return false
+	end
+
+	local pop = Vector3.new(
+		pushDir.X * Config.EggKnockLooseSpeed,
+		Config.EggKnockLooseUpward,
+		pushDir.Z * Config.EggKnockLooseSpeed
+	)
+	EggService.Fumble(victim, "Attacked", pop)
+
+	local victimRoot = getRoot(victim)
+	broadcastFeedback("EggStolen", {
+		Attacker = attacker,
+		Victim = victim,
+		Position = victimRoot and victimRoot.Position or nil,
+	})
+	return true
+end
+
+---------------------------------------------------------------------------
 -- Attack
 ---------------------------------------------------------------------------
 
 local function handleAttack(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return -- remote spam: dropped + strike (see AntiCheatService)
+	end
 	local character = getAliveCharacter(player)
 	if not character then
 		return
@@ -791,14 +1915,17 @@ local function handleAttack(player)
 	end
 
 	local hits = 0
-	for _, victim in ipairs(Players:GetPlayers()) do
+	for _, victim in ipairs(BotRegistry.GetParticipants()) do
 		if victim ~= player then
 			local victimRoot = getRoot(victim)
 			local victimCharacter = getAliveCharacter(victim)
 			if victimRoot and victimCharacter then
 				local offset = victimRoot.Position - root.Position
 				local distance = offset.Magnitude
-				-- +1 stud accounts for the victim's body radius.
+				-- +1 stud accounts for the victim's body radius. NOTE: this
+				-- distance is computed from SERVER positions only -- the
+				-- client never sends coordinates, so impossible attack
+				-- ranges simply whiff (anti-cheat by construction).
 				if distance <= Config.AttackRange + 1 then
 					local pushDir = Vector3.new(offset.X, 0, offset.Z)
 					if pushDir.Magnitude < 0.001 then
@@ -813,13 +1940,26 @@ local function handleAttack(player)
 						hits = hits + 1
 
 						local victimWasCarrier = (EggService.GetCarrier() == victim)
-						local victimIFramed = (nowv < getStatus(victim).iFramesUntil)
+						local victimIsPlayer = victim:IsA("Player")
+						local victimIFramed = victimIsPlayer
+							and (nowv < getStatus(victim).iFramesUntil) or false
 
-						local result = CombatService.ApplyKnockback(
-							victim, pushDir,
-							Config.AttackKnockback, Config.AttackUpwardKnockback,
-							Config.AttackHitstun
-						)
+						local result
+						if victimIsPlayer then
+							result = CombatService.ApplyKnockback(
+								victim, pushDir,
+								Config.AttackKnockback, Config.AttackUpwardKnockback,
+								Config.AttackHitstun
+							)
+						else
+							-- Bot victim: registry knockback + stagger (bots
+							-- cannot block or i-frame).
+							result = BotRegistry.KnockbackBot(
+								victim, pushDir,
+								Config.AttackKnockback, Config.AttackUpwardKnockback,
+								Config.Bots.StunTime
+							)
+						end
 
 						broadcastFeedback("PunchHit", {
 							Attacker = player,
@@ -842,22 +1982,10 @@ local function handleAttack(player)
 						end
 
 						-- Steal: punching the carrier knocks the egg loose
-						-- (i-framed carriers keep it -- the punch fully whiffed).
+						-- (i-framed carriers keep it; pets get a tiny capped
+						-- grip chance inside AttemptSteal).
 						if victimWasCarrier and not victimIFramed then
-							EggService.Fumble(
-								victim,
-								"Attacked",
-								Vector3.new(
-									pushDir.X * Config.EggKnockLooseSpeed,
-									Config.EggKnockLooseUpward,
-									pushDir.Z * Config.EggKnockLooseSpeed
-								)
-							)
-							broadcastFeedback("EggStolen", {
-								Attacker = player,
-								Victim = victim,
-								Position = victimRoot.Position,
-							})
+							CombatService.AttemptSteal(player, victim, pushDir)
 						end
 					end
 				end
@@ -879,6 +2007,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleThrow(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	local character = getAliveCharacter(player)
 	if not character then
 		return
@@ -911,6 +2042,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleDash(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	local character = getAliveCharacter(player)
 	if not character then
 		return
@@ -954,13 +2088,13 @@ local function handleDash(player)
 end
 
 -- Carrier dash collision check (runs in the ticker while dashing): bumping
--- into another player fumbles the egg and nudges the victim.
+-- into another participant fumbles the egg and nudges the victim.
 local function checkDashCollision(player, status)
 	local root = getRoot(player)
 	if not root then
 		return
 	end
-	for _, other in ipairs(Players:GetPlayers()) do
+	for _, other in ipairs(BotRegistry.GetParticipants()) do
 		if other ~= player then
 			local otherRoot = getRoot(other)
 			if otherRoot and getAliveCharacter(other) then
@@ -979,11 +2113,19 @@ local function checkDashCollision(player, status)
 						Victim = other,
 						Position = root.Position,
 					})
-					CombatService.ApplyKnockback(
-						other, pushDir,
-						Config.DashCollisionKnockback, Config.DashCollisionUpward,
-						nil
-					)
+					if other:IsA("Player") then
+						CombatService.ApplyKnockback(
+							other, pushDir,
+							Config.DashCollisionKnockback, Config.DashCollisionUpward,
+							nil
+						)
+					else
+						BotRegistry.KnockbackBot(
+							other, pushDir,
+							Config.DashCollisionKnockback, Config.DashCollisionUpward,
+							Config.Bots.StunTime
+						)
+					end
 					return
 				end
 			end
@@ -996,6 +2138,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleBlockStart(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	if not getAliveCharacter(player) then
 		return
 	end
@@ -1025,6 +2170,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleSprintStart(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	if not getAliveCharacter(player) then
 		return
 	end
@@ -1032,6 +2180,9 @@ local function handleSprintStart(player)
 	-- hysteresis lives there so SprintStart/SprintEnd feedback is truthful).
 	getStatus(player).sprinting = true
 end
+
+-- NOTE: BlockEnd / SprintEnd are deliberately NOT rate-limited -- dropping a
+-- release request could lock a player in a blocking/sprinting state.
 
 local function handleSprintEnd(player)
 	getStatus(player).sprinting = false
@@ -1046,11 +2197,21 @@ function CombatService.HandleEggImpact(player, eggVelocity)
 	if direction.Magnitude < 0.001 then
 		direction = Vector3.new(0, 0, 1)
 	end
-	local result = CombatService.ApplyKnockback(
-		player, direction,
-		Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
-		Config.EggThrowImpactStun
-	)
+	local result
+	if player:IsA("Player") then
+		result = CombatService.ApplyKnockback(
+			player, direction,
+			Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
+			Config.EggThrowImpactStun
+		)
+	else
+		-- Bot got beaned by a thrown egg.
+		result = BotRegistry.KnockbackBot(
+			player, direction,
+			Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
+			Config.Bots.StunTime
+		)
+	end
 	if Config.DebugVerboseLogging then
 		print("[CombatService] Thrown egg hit " .. player.Name .. " (" .. result .. ")")
 	end
@@ -1276,35 +2437,655 @@ return CombatService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX36">
+<Item class="ModuleScript" referent="RBX42">
 <Properties>
 	<string name="Name">DataService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
 	DataService (ServerScriptService.DataService)
 	=============================================
-	STATUS: reserved for later -- intentionally empty.
+	pcall-wrapped persistence for the whole meta layer:
 
-	Future responsibilities
-	-----------------------
-	* ProfileStore/SessionLock persistence (wins, losses, MVPs, cosmetics).
-	* Load on PlayerAdded, save on PlayerRemoving / BindToClose.
+	  Clout, Egg Fragments, ELO, pets, eggs (with hatch timers), the pity
+	  counter (matches since last round win), lifetime hold time, match
+	  stats (wins / MVPs / matches played).
 
-	No DataStore calls are made yet (the game is structure-only at this stage
-	and DataStores need a published game + API access enabled).
+	Design (per spec: SIMPLE, graceful):
+	  * One key per player: "Player_<UserId>" in Config.Data.StoreName.
+	  * Load on join with retries; if it still fails the player gets a
+	    TEMPORARY in-memory profile (marked `Temporary = true`) so they can
+	    play, and we NEVER save over real data from a failed load.
+	  * Auto-save every Config.Data.AutoSaveSeconds, on PlayerRemoving and
+	    in BindToClose (all pcall-wrapped with retries).
+	  * Studio: Config.Data.UseRealStoreInStudio = false keeps profiles in a
+	    memory table -- they still persist across rejoins inside the same
+	    Studio session, so the full flow is testable without publishing.
+	  * leaderstats (Clout / Frags / Pet) are created immediately and kept
+	    in sync, so the stock Roblox leaderboard shows the economy.
+
+	API:
+	  DataService.Init()
+	  DataService.OnProfileReady(callback)        -- callback(player, profile)
+	  DataService.GetProfile(player) -> profile?  (nil until loaded)
+	  DataService.IsLoaded(player) -> bool
+	  DataService.Get(player, key, default)
+	  DataService.Set(player, key, value)
+	  DataService.AddNumeric(player, key, amount) -> newValue?
+	  DataService.AddClout(player, amount) -> newClout?
+	  DataService.AddFragments(player, amount) -> newFragments?
+	  DataService.GetElo(player) / SetElo(player, elo)
+	  DataService.AddLifetimeHold(player, seconds)
+	  DataService.GetSnapshot(player) -> plain table for remotes
+	  DataService.Save(player) / SaveAll()
+	  DataService.DebugState()
 ]]
+
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 
 local DataService = {}
 
+local store = nil -- DataStoreService:GetDataStore(Config.Data.StoreName)
+local useRealStore = false
+local memoryStore = {}   -- Studio/testing fallback: { [key] = deepCopy }
+local profiles = {}      -- { [Player] = profile }
+local initialized = false
+local profileReadyCallbacks = {}
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+
+local function deepCopy(original)
+	local copy = {}
+	for key, value in pairs(original) do
+		if type(value) == "table" then
+			copy[key] = deepCopy(value)
+		else
+			copy[key] = value
+		end
+	end
+	return copy
+end
+
+local function defaultProfile()
+	return {
+		Clout = Config.Economy.StartingClout,
+		Fragments = 0,
+		Elo = Config.Matchmaking.DefaultElo,
+		LifetimeHoldTime = 0,
+		MatchesPlayed = 0,
+		RoundWins = 0,
+		MVPs = 0,
+		MatchesSinceRoundWin = 0,  -- pity counter
+		Eggs = {},                 -- { {Id, Source, GuaranteedRare, UnlocksAt} }
+		Pets = {},                 -- { {Id, Name, Species, Rarity, Size, Mutation?, GripBonus, CreatedAt} }
+		EquippedPetId = nil,
+	}
+end
+
+-- Merges a stored table into fresh defaults so schema additions never crash
+-- on old profiles.
+local function migrate(stored)
+	local profile = defaultProfile()
+	if type(stored) ~= "table" then
+		return profile
+	end
+	for key, value in pairs(stored) do
+		if key == "Eggs" or key == "Pets" then
+			if type(value) == "table" then
+				profile[key] = value
+			end
+		else
+			profile[key] = value
+		end
+	end
+	return profile
+end
+
+local function storeKey(player)
+	return "Player_" .. player.UserId
+end
+
+local function rawGet(key)
+	if not useRealStore then
+		local existing = memoryStore[key]
+		return existing and deepCopy(existing) or nil
+	end
+	return store:GetAsync(key) -- may throw; callers pcall
+end
+
+local function rawSet(key, value)
+	if not useRealStore then
+		memoryStore[key] = deepCopy(value)
+		return
+	end
+	store:SetAsync(key, value) -- may throw; callers pcall
+end
+
+local function stripTransient(profile)
+	local copy = deepCopy(profile)
+	copy.Temporary = nil
+	copy.LoadedAt = nil
+	return copy
+end
+
+---------------------------------------------------------------------------
+-- leaderstats (stock Roblox leaderboard: Clout, Frags, Pet)
+---------------------------------------------------------------------------
+
+local function getStat(player, name, className)
+	local folder = player:FindFirstChild("leaderstats")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "leaderstats"
+		folder.Parent = player
+	end
+	local stat = folder:FindFirstChild(name)
+	if not stat then
+		stat = Instance.new(className)
+		stat.Name = name
+		stat.Parent = folder
+	end
+	return stat
+end
+
+local function refreshLeaderstats(player)
+	local profile = profiles[player]
+	local clout = getStat(player, "Clout", "IntValue")
+	clout.Value = profile and math.floor(profile.Clout or 0) or 0
+	local frags = getStat(player, "Frags", "IntValue")
+	frags.Value = profile and math.floor(profile.Fragments or 0) or 0
+
+	local petStat = getStat(player, "Pet", "StringValue")
+	local petName = "none"
+	if profile and profile.EquippedPetId then
+		for _, pet in ipairs(profile.Pets) do
+			if pet.Id == profile.EquippedPetId then
+				petName = pet.Rarity .. " " .. pet.Name
+				break
+			end
+		end
+	end
+	petStat.Value = petName
+end
+
+---------------------------------------------------------------------------
+-- Load / save
+---------------------------------------------------------------------------
+
+local function loadProfile(player)
+	local key = storeKey(player)
+	local stored = nil
+	local ok = false
+
+	for attempt = 1, Config.Data.LoadRetries do
+		ok, stored = pcall(rawGet, key)
+		if ok then
+			break
+		end
+		warn(("[DataService] load attempt %d/%d failed for %s: %s"):format(
+			attempt, Config.Data.LoadRetries, player.Name, tostring(stored)))
+		if attempt < Config.Data.LoadRetries then
+			task.wait(Config.Data.RetryDelaySeconds * attempt)
+		end
+	end
+
+	local profile
+	if ok then
+		profile = migrate(stored)
+	else
+		-- Load failed: play on defaults but NEVER save (protects real data).
+		profile = defaultProfile()
+		profile.Temporary = true
+		warn(("[DataService] %s is playing on a TEMPORARY profile (load failed)")
+			:format(player.Name))
+	end
+
+	profile.LoadedAt = os.time()
+	profiles[player] = profile
+	refreshLeaderstats(player)
+
+	for _, callback in ipairs(profileReadyCallbacks) do
+		task.spawn(callback, player, profile)
+	end
+	if Config.DebugVerboseLogging then
+		print(("[DataService] loaded %s (Clout=%d Frags=%d Pets=%d%s)"):format(
+			player.Name, profile.Clout, profile.Fragments, #profile.Pets,
+			profile.Temporary and " TEMPORARY" or ""))
+	end
+end
+
+function DataService.Save(player)
+	local profile = profiles[player]
+	if not profile or profile.Temporary then
+		return false -- nothing loaded or protecting real data
+	end
+	local payload = stripTransient(profile)
+	for attempt = 1, Config.Data.SaveRetries do
+		local ok, err = pcall(rawSet, storeKey(player), payload)
+		if ok then
+			return true
+		end
+		warn(("[DataService] save attempt %d/%d failed for %s: %s"):format(
+			attempt, Config.Data.SaveRetries, player.Name, tostring(err)))
+		if attempt < Config.Data.SaveRetries then
+			task.wait(Config.Data.RetryDelaySeconds)
+		end
+	end
+	return false
+end
+
+function DataService.SaveAll()
+	for _, player in ipairs(Players:GetPlayers()) do
+		DataService.Save(player)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
 function DataService.Init()
-	-- TODO(data): persistence, wired up in a later pass.
-	print("[DataService] stub initialized (persistence comes later)")
+	if initialized then
+		return
+	end
+	initialized = true
+
+	useRealStore = (not RunService:IsStudio()) or Config.Data.UseRealStoreInStudio
+	if useRealStore then
+		local ok, result = pcall(function()
+			return DataStoreService:GetDataStore(Config.Data.StoreName)
+		end)
+		if ok then
+			store = result
+		else
+			warn("[DataService] GetDataStore failed (" .. tostring(result)
+				.. ") -- falling back to memory profiles")
+			useRealStore = false
+		end
+	else
+		print("[DataService] Studio mode: memory profiles (persist across rejoins this session)")
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		refreshLeaderstats(player)
+		task.spawn(loadProfile, player)
+	end
+	Players.PlayerAdded:Connect(function(player)
+		refreshLeaderstats(player) -- show zeros instantly, load fills them in
+		task.spawn(loadProfile, player)
+	end)
+	Players.PlayerRemoving:Connect(function(player)
+		DataService.Save(player)
+		profiles[player] = nil
+	end)
+
+	-- Auto-save loop.
+	task.spawn(function()
+		while true do
+			task.wait(Config.Data.AutoSaveSeconds)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local profile = profiles[player]
+				if profile and not profile.Temporary then
+					task.spawn(DataService.Save, player)
+				end
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		-- Best-effort final save; pcall-wrapped so shutdown never errors out.
+		pcall(function()
+			DataService.SaveAll()
+		end)
+		task.wait(1)
+	end)
+
+	print("[DataService] Initialized: persistence + leaderstats live ("
+		.. (useRealStore and "DataStore" or "memory") .. ")")
+end
+
+function DataService.OnProfileReady(callback)
+	table.insert(profileReadyCallbacks, callback)
+end
+
+function DataService.GetProfile(player)
+	return profiles[player]
+end
+
+function DataService.IsLoaded(player)
+	return profiles[player] ~= nil
+end
+
+function DataService.Get(player, key, default)
+	local profile = profiles[player]
+	if not profile or profile[key] == nil then
+		return default
+	end
+	return profile[key]
+end
+
+function DataService.Set(player, key, value)
+	local profile = profiles[player]
+	if not profile then
+		return nil
+	end
+	profile[key] = value
+	if key == "Clout" or key == "Fragments" or key == "EquippedPetId" then
+		refreshLeaderstats(player)
+	end
+	return value
+end
+
+function DataService.AddNumeric(player, key, amount)
+	local profile = profiles[player]
+	if not profile then
+		return nil
+	end
+	profile[key] = (tonumber(profile[key]) or 0) + amount
+	if key == "Clout" or key == "Fragments" then
+		refreshLeaderstats(player)
+	end
+	return profile[key]
+end
+
+function DataService.AddClout(player, amount)
+	return DataService.AddNumeric(player, "Clout", amount)
+end
+
+function DataService.AddFragments(player, amount)
+	return DataService.AddNumeric(player, "Fragments", amount)
+end
+
+function DataService.GetElo(player)
+	return DataService.Get(player, "Elo", Config.Matchmaking.DefaultElo)
+end
+
+function DataService.SetElo(player, elo)
+	elo = math.clamp(math.floor(elo), Config.Matchmaking.MinElo, Config.Matchmaking.MaxElo)
+	return DataService.Set(player, "Elo", elo)
+end
+
+function DataService.AddLifetimeHold(player, seconds)
+	return DataService.AddNumeric(player, "LifetimeHoldTime", seconds)
+end
+
+-- Plain-table snapshot safe to send over remotes (HatcheryUpdated).
+function DataService.GetSnapshot(player)
+	local profile = profiles[player]
+	if not profile then
+		return nil
+	end
+	return {
+		Clout = math.floor(profile.Clout or 0),
+		Fragments = math.floor(profile.Fragments or 0),
+		Elo = profile.Elo or Config.Matchmaking.DefaultElo,
+		LifetimeHoldTime = math.floor(profile.LifetimeHoldTime or 0),
+		MatchesPlayed = profile.MatchesPlayed or 0,
+		RoundWins = profile.RoundWins or 0,
+		MVPs = profile.MVPs or 0,
+		PityProgress = {
+			SinceRoundWin = profile.MatchesSinceRoundWin or 0,
+			Needed = Config.Economy.PityMatchesWithoutRoundWin,
+		},
+		Eggs = deepCopy(profile.Eggs or {}),
+		Pets = deepCopy(profile.Pets or {}),
+		EquippedPetId = profile.EquippedPetId,
+		StoreOK = not profile.Temporary,
+		Now = os.time(), -- clients compute hatch countdowns from this
+	}
+end
+
+function DataService.DebugState()
+	local loaded, temporary = 0, 0
+	for _, player in ipairs(Players:GetPlayers()) do
+		local profile = profiles[player]
+		if profile then
+			loaded = loaded + 1
+			if profile.Temporary then
+				temporary = temporary + 1
+			end
+		end
+	end
+	return ("mode=%s loaded=%d/%d temporary=%d"):format(
+		useRealStore and "DataStore" or "memory", loaded, #Players:GetPlayers(), temporary)
 end
 
 return DataService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX37">
+<Item class="ModuleScript" referent="RBX43">
+<Properties>
+	<string name="Name">EconomyService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	EconomyService (ServerScriptService.EconomyService)
+	===================================================
+	Awards the meta currency once per completed match.
+
+	Clout (soft currency), per real player in the final standings:
+	  participation + hold seconds + knockdowns + steals
+	  + round wins + MVP bonus                       (all Config.Economy)
+
+	Egg Fragments, ranked by TOTAL match hold time:
+	  rank 1..6 -> Config.Economy.FragmentsByRank (top 3 earn more,
+	  ranks 4-6 still earn some -- never zero).
+
+	Pity: every match WITHOUT a round win bumps MatchesSinceRoundWin;
+	after Config.Economy.PityMatchesWithoutRoundWin (10) winless matches
+	the player's NEXT round win instantly grants a GUARANTEED-RARE egg
+	and resets the counter (tracked in data, survives rejoins).
+
+	Knockdown/steal counting listens to the server-side ServerFeedback
+	BindableEvent (Main creates it; CombatService/EggService mirror every
+	FeedbackEvent into it) -- so no gameplay module has to know the economy
+	exists. Bots earn nothing (they have no profiles).
+
+	Fired: MatchRewards (per client) with the full breakdown; lifetime
+	hold time / MatchesPlayed / RoundWins / MVPs update in data.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local DataService = require(ServerScriptService:WaitForChild("DataService"))
+local HatcheryService = require(ServerScriptService:WaitForChild("HatcheryService"))
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local MatchRewards = Remotes:WaitForChild("MatchRewards")
+
+local EconomyService = {}
+
+local matchStats = {}   -- { [Player] = { Knockdowns = n, Steals = n } }
+local serverFeedback = nil
+local initialized = false
+
+local function getStats(player)
+	local stats = matchStats[player]
+	if not stats then
+		stats = { Knockdowns = 0, Steals = 0 }
+		matchStats[player] = stats
+	end
+	return stats
+end
+
+-- Called by MatchService (injected by Main) at the start of every match.
+function EconomyService.ResetMatchStats()
+	matchStats = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		matchStats[player] = { Knockdowns = 0, Steals = 0 }
+	end
+end
+
+---------------------------------------------------------------------------
+-- Match settlement
+---------------------------------------------------------------------------
+
+local function awardPlayer(player, entry, rank)
+	local profile = DataService.GetProfile(player)
+	if not profile then
+		return -- data never loaded: skip silently (they keep playing)
+	end
+	local stats = getStats(player)
+
+	-- 1) Clout breakdown.
+	local knockdowns = math.min(stats.Knockdowns, Config.Economy.MaxKnockdownsCredited)
+	local steals = math.min(stats.Steals, Config.Economy.MaxStealsCredited)
+	local holdSeconds = math.floor(entry.TotalHoldTime or 0)
+
+	local clout = Config.Economy.CloutParticipation
+		+ holdSeconds * Config.Economy.CloutPerHoldSecond
+		+ knockdowns * Config.Economy.CloutPerKnockdown
+		+ steals * Config.Economy.CloutPerSteal
+		+ (entry.RoundsWon or 0) * Config.Economy.CloutPerRoundWin
+		+ (entry.IsMVP and Config.Economy.CloutMVPBonus or 0)
+
+	-- 2) Fragments by final rank (never zero).
+	local fragments = Config.Economy.FragmentsByRank[rank]
+		or Config.Economy.FragmentsByRank[#Config.Economy.FragmentsByRank]
+
+	-- 3) Pity: winless-match counter, guaranteed-rare egg on the next win.
+	local roundsWon = entry.RoundsWon or 0
+	local pityEgg = false
+	if roundsWon > 0 then
+		if (profile.MatchesSinceRoundWin or 0) >= Config.Economy.PityMatchesWithoutRoundWin then
+			pityEgg = true
+		end
+		DataService.Set(player, "MatchesSinceRoundWin", 0)
+	else
+		DataService.Set(player, "MatchesSinceRoundWin",
+			(profile.MatchesSinceRoundWin or 0) + 1)
+	end
+
+	-- 4) Apply.
+	local newClout = DataService.AddClout(player, clout)
+	local newFragments = DataService.AddFragments(player, fragments)
+	DataService.AddLifetimeHold(player, entry.TotalHoldTime or 0)
+	DataService.Set(player, "MatchesPlayed", (profile.MatchesPlayed or 0) + 1)
+	DataService.Set(player, "RoundWins", (profile.RoundWins or 0) + roundsWon)
+	if entry.IsMVP then
+		DataService.Set(player, "MVPs", (profile.MVPs or 0) + 1)
+	end
+	local grantedEgg = nil
+	if pityEgg then
+		grantedEgg = HatcheryService.GrantEgg(player, "Pity", true)
+	end
+
+	-- 5) Tell the client (GUI toast + panel refresh).
+	MatchRewards:FireClient(player, {
+		Rank = rank,
+		Clout = clout,
+		Fragments = fragments,
+		NewClout = math.floor(newClout or 0),
+		NewFragments = math.floor(newFragments or 0),
+		Knockdowns = knockdowns,
+		Steals = steals,
+		HoldSeconds = holdSeconds,
+		RoundsWon = roundsWon,
+		IsMVP = entry.IsMVP and true or false,
+		PityEgg = pityEgg,
+		EggGranted = grantedEgg ~= nil,
+		PityProgress = {
+			SinceRoundWin = DataService.Get(player, "MatchesSinceRoundWin", 0),
+			Needed = Config.Economy.PityMatchesWithoutRoundWin,
+		},
+	})
+
+	if Config.DebugVerboseLogging then
+		print(("[Economy] %s: rank %d -> +%d Clout (total %d), +%d Frags (total %d)%s"):format(
+			player.Name, rank, clout, math.floor(newClout or 0),
+			fragments, math.floor(newFragments or 0),
+			pityEgg and "  [PITY: guaranteed-rare egg granted!]" or ""))
+	end
+end
+
+-- Called by MatchService (injected by Main) right after MatchEnded fires.
+function EconomyService.SettleMatch(final)
+	if type(final) ~= "table" or type(final.Standings) ~= "table" then
+		return
+	end
+	for rank, entry in ipairs(final.Standings) do
+		local player = entry.Player
+		if player and player:IsA("Player") and player.Parent and not entry.Left then
+			awardPlayer(player, entry, rank)
+		end
+		-- Bots and leavers earn nothing.
+	end
+	-- Hatchery snapshots refresh so egg/pity changes show immediately.
+	for _, player in ipairs(Players:GetPlayers()) do
+		HatcheryService.SendSnapshot(player)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Init
+---------------------------------------------------------------------------
+
+function EconomyService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	-- Mirror of every FeedbackEvent, server-side (Main creates the bindable).
+	serverFeedback = ServerScriptService:FindFirstChild("ServerFeedback")
+	if serverFeedback and serverFeedback:IsA("BindableEvent") then
+		serverFeedback.Event:Connect(function(kind, data)
+			if type(data) ~= "table" then
+				return
+			end
+			if kind == "PunchHit" and data.Result == "Hit" and data.Attacker then
+				local attacker = data.Attacker
+				if attacker:IsA("Player") then
+					getStats(attacker).Knockdowns = getStats(attacker).Knockdowns + 1
+				end
+			elseif kind == "EggStolen" and data.Attacker then
+				local attacker = data.Attacker
+				if attacker:IsA("Player") then
+					getStats(attacker).Steals = getStats(attacker).Steals + 1
+				end
+			elseif kind == "DashFumble" and data.Player then
+				-- Dash-fumbling the carrier counts as a steal for the dasher.
+				local dasher = data.Player
+				if dasher:IsA("Player") then
+					getStats(dasher).Steals = getStats(dasher).Steals + 1
+				end
+			end
+		end)
+	else
+		warn("[EconomyService] ServerScriptService.ServerFeedback missing -- knockdown/steal stats disabled")
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		matchStats[player] = nil
+	end)
+
+	print("[EconomyService] Initialized: match rewards (Clout + fragments + pity) live")
+end
+
+function EconomyService.DebugState()
+	local parts = {}
+	for player, stats in pairs(matchStats) do
+		if player.Parent then
+			table.insert(parts, ("%s[kd=%d steals=%d]"):format(
+				player.Name, stats.Knockdowns, stats.Steals))
+		end
+	end
+	table.sort(parts)
+	return #parts > 0 and table.concat(parts, ", ") or "(no stats yet)"
+end
+
+return EconomyService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX44">
 <Properties>
 	<string name="Name">EggService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1362,9 +3143,13 @@ return DataService
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+-- Shared participant roster: real Players + bot Models (BotService builds
+-- them; BotRegistry is dependency-free so requiring it is always safe).
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local EggPossessionChanged = Remotes:WaitForChild("EggPossessionChanged")
@@ -1440,7 +3225,18 @@ local function getAliveHumanoid(character)
 	return nil
 end
 
+-- Server-side mirror of every feedback event (Main creates the bindable;
+-- EconomyService listens for knockdown/steal counting). Cached lazily;
+-- `false` means "looked, not there" so we never re-search every tick.
+local serverFeedback = nil
+
 local function broadcastFeedback(kind, data)
+	if serverFeedback == nil then
+		serverFeedback = ServerScriptService:FindFirstChild("ServerFeedback") or false
+	end
+	if serverFeedback then
+		serverFeedback:Fire(kind, data or {})
+	end
 	FeedbackEvent:FireAllClients(kind, data or {})
 end
 
@@ -1573,8 +3369,8 @@ local function tryPickup(player)
 	if state ~= STATE_LOOSE or not egg then
 		return false
 	end
-	if typeof(player) ~= "Instance" or not player:IsA("Player") then
-		return false
+	if not BotRegistry.IsParticipant(player) then
+		return false -- spectators (>MaxPlayers servers) and junk cannot grab
 	end
 
 	local lockUntil = pickupLockout[player]
@@ -1587,7 +3383,8 @@ local function tryPickup(player)
 		return false
 	end
 
-	local character = player.Character
+	-- Works for Players (their Character) and bots (the Model itself).
+	local character = BotRegistry.GetCharacter(player)
 	local humanoid = getAliveHumanoid(character)
 	local torso = getTorso(character)
 	if not humanoid or not torso then
@@ -1631,8 +3428,9 @@ local function onEggTouched(hit)
 		return
 	end
 	local character = hit:FindFirstAncestorOfClass("Model")
-	local player = character and Players:GetPlayerFromCharacter(character)
-	if not player then
+	local player = character and (Players:GetPlayerFromCharacter(character)
+		or BotRegistry.GetBotFromCharacter(character))
+	if not player or not BotRegistry.IsParticipant(player) then
 		return
 	end
 
@@ -1678,8 +3476,8 @@ local function doFumble(player, reason, popVelocity)
 	-- Place the egg loose at the carrier's position (slightly forward+up so
 	-- it does not spawn inside the character), clamped inside the arena so a
 	-- fumble against a wall cannot push it out of bounds.
-	local root = previousCarrier.Character
-		and previousCarrier.Character:FindFirstChild("HumanoidRootPart")
+	local carrierCharacter = BotRegistry.GetCharacter(previousCarrier)
+	local root = carrierCharacter and carrierCharacter:FindFirstChild("HumanoidRootPart")
 	local dropPosition
 	if root then
 		dropPosition = root.CFrame:PointToWorldSpace(Vector3.new(0, 1, -2))
@@ -1803,14 +3601,15 @@ local function tickOnce()
 		--    register reliably at low framerates / on mobile.
 		--    TODO(polish): add line-of-sight check so it cannot grab through walls.
 		if state == STATE_LOOSE then
-			for _, player in ipairs(Players:GetPlayers()) do
-				local humanoid = getAliveHumanoid(player.Character)
+			for _, entity in ipairs(BotRegistry.GetParticipants()) do
+				local character = BotRegistry.GetCharacter(entity)
+				local humanoid = getAliveHumanoid(character)
 				if humanoid then
-					local root = player.Character:FindFirstChild("HumanoidRootPart")
+					local root = character:FindFirstChild("HumanoidRootPart")
 					if root
 						and (root.Position - egg.Position).Magnitude <= Config.EggProximityPickupRadius
 					then
-						if tryPickup(player) then
+						if tryPickup(entity) then
 							break -- one pickup per tick maximum
 						end
 					end
@@ -1964,10 +3763,19 @@ function EggService.Fumble(target, reason, popVelocity)
 		target = carrier
 	end
 	if typeof(target) == "string" then
-		target = Players:FindFirstChild(target)
+		local resolved = Players:FindFirstChild(target)
+		if not resolved then
+			for _, model in ipairs(BotRegistry.GetBots()) do
+				if model.Name == target then
+					resolved = model
+					break
+				end
+			end
+		end
+		target = resolved
 	end
-	if typeof(target) ~= "Instance" or not target:IsA("Player") then
-		warn("[EggService] Fumble: could not resolve target player (" .. tostring(target) .. ")")
+	if not BotRegistry.IsParticipant(target) then
+		warn("[EggService] Fumble: could not resolve target (" .. tostring(target) .. ")")
 		return false
 	end
 	if not carrier then
@@ -2090,7 +3898,328 @@ return EggService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="Script" referent="RBX38">
+<Item class="ModuleScript" referent="RBX45">
+<Properties>
+	<string name="Name">HatcheryService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	HatcheryService (ServerScriptService.HatcheryService)
+	=====================================================
+	The egg/pet economy on the server:
+
+	  * BUY an egg with Clout (Config.Economy.EggCloutCost)
+	  * CONVERT 10 Egg Fragments into an egg (Config.Economy.EggFragmentCost)
+	  * Every egg carries a hatch timer (Config.Economy.HatchTimeSeconds);
+	    opening a READY egg rolls a pet: rarity (weighted), size, optional
+	    mutation, and a tiny capped grip bonus (Config.Pets.GripByRarity).
+	  * Pity eggs (granted by EconomyService after 10 winless matches + a
+	    round win) roll from RareGuaranteedWeights instead.
+	  * Pets live in the player's data profile (DataService) -- persisted.
+	  * Equipped pet's grip = % chance to survive a punch that would knock
+	    the egg loose (CombatService calls GetGripBonus). Cosmetic flex:
+	    the equipped pet shows in leaderstats.
+
+	Remotes:
+	  HatcheryRequest  (client -> server): action [, id]
+	    actions: "BuyEgg" | "ConvertFragments" | "OpenEgg" <eggId>
+	           | "EquipPet" <petId> | "Refresh"
+	  HatcheryUpdated  (server -> client): full profile snapshot
+	  FeedbackEvent    (server -> one client): "PetHatched" {Pet}
+	                                     ... "EggGranted" {Egg}
+
+	ALL validation is server-side; clients only ask.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local DataService = require(ServerScriptService:WaitForChild("DataService"))
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local HatcheryRequest = Remotes:WaitForChild("HatcheryRequest")
+local HatcheryUpdated = Remotes:WaitForChild("HatcheryUpdated")
+local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
+
+local HatcheryService = {}
+
+local idCounter = 0
+local initialized = false
+
+local function nextId(prefix)
+	idCounter = idCounter + 1
+	return ("%s_%d_%d"):format(prefix, os.time(), idCounter)
+end
+
+local function personalFeedback(player, kind, data)
+	if player:IsA("Player") then
+		FeedbackEvent:FireClient(player, kind, data or {})
+	end
+end
+
+function HatcheryService.SendSnapshot(player)
+	local snapshot = DataService.GetSnapshot(player)
+	if snapshot then
+		HatcheryUpdated:FireClient(player, snapshot)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Egg creation
+---------------------------------------------------------------------------
+
+local function addEgg(player, source, guaranteedRare)
+	local profile = DataService.GetProfile(player)
+	if not profile then
+		return nil
+	end
+	local egg = {
+		Id = nextId("egg"),
+		Source = source or "Bought",          -- Bought | Converted | Pity | Debug
+		GuaranteedRare = guaranteedRare and true or false,
+		UnlocksAt = os.time() + Config.Economy.HatchTimeSeconds,
+	}
+	table.insert(profile.Eggs, egg)
+	personalFeedback(player, "EggGranted", { Egg = egg })
+	HatcheryService.SendSnapshot(player)
+	if Config.DebugVerboseLogging then
+		print(("[Hatchery] %s got a %s egg (ready in %ds)"):format(
+			player.Name, egg.GuaranteedRare and "guaranteed-rare" or "mystery",
+			Config.Economy.HatchTimeSeconds))
+	end
+	return egg
+end
+
+-- EconomyService (pity wins) and debug commands call this.
+function HatcheryService.GrantEgg(player, source, guaranteedRare)
+	return addEgg(player, source, guaranteedRare)
+end
+
+---------------------------------------------------------------------------
+-- Pet rolling
+---------------------------------------------------------------------------
+
+local function pickWeighted(weights)
+	local total = 0
+	for _, weight in pairs(weights) do
+		total = total + weight
+	end
+	if total <= 0 then
+		return nil
+	end
+	local roll = math.random() * total
+	for name, weight in pairs(weights) do
+		roll = roll - weight
+		if roll <= 0 then
+			return name
+		end
+	end
+	return nil
+end
+
+local function pickFrom(list)
+	return list[math.random(1, #list)]
+end
+
+local function rollPet(guaranteedRare)
+	local rarity = pickWeighted(guaranteedRare
+		and Config.Pets.RareGuaranteedWeights
+		or Config.Pets.RarityWeights) or "Common"
+	local species = pickFrom(Config.Pets.Species)
+	local mutation = nil
+	if math.random() < Config.Pets.MutationChance then
+		mutation = pickFrom(Config.Pets.Mutations)
+	end
+	local grip = math.min(
+		Config.Pets.GripByRarity[rarity] or 0,
+		Config.Pets.MaxGripBonus
+	)
+	local name = (mutation and (mutation .. " ") or "") .. species
+	return {
+		Id = nextId("pet"),
+		Name = name,
+		Species = species,
+		Rarity = rarity,
+		Size = pickFrom(Config.Pets.Sizes),
+		Mutation = mutation,
+		GripBonus = grip,
+		CreatedAt = os.time(),
+	}
+end
+
+---------------------------------------------------------------------------
+-- Actions (all server-validated)
+---------------------------------------------------------------------------
+
+local function buyEgg(player)
+	local profile = DataService.GetProfile(player)
+	if not profile then
+		return
+	end
+	if profile.Clout < Config.Economy.EggCloutCost then
+		personalFeedback(player, "NotEnoughClout", {
+			Need = Config.Economy.EggCloutCost, Have = math.floor(profile.Clout) })
+		return
+	end
+	DataService.AddClout(player, -Config.Economy.EggCloutCost)
+	addEgg(player, "Bought", false)
+end
+
+local function convertFragments(player)
+	local profile = DataService.GetProfile(player)
+	if not profile then
+		return
+	end
+	if profile.Fragments < Config.Economy.EggFragmentCost then
+		personalFeedback(player, "NotEnoughFragments", {
+			Need = Config.Economy.EggFragmentCost, Have = math.floor(profile.Fragments) })
+		return
+	end
+	DataService.AddFragments(player, -Config.Economy.EggFragmentCost)
+	addEgg(player, "Converted", false)
+end
+
+local function openEgg(player, eggId)
+	local profile = DataService.GetProfile(player)
+	if not profile or type(eggId) ~= "string" then
+		return
+	end
+	local eggIndex = nil
+	for index, egg in ipairs(profile.Eggs) do
+		if egg.Id == eggId then
+			eggIndex = index
+			break
+		end
+	end
+	if not eggIndex then
+		return
+	end
+	local egg = profile.Eggs[eggIndex]
+	if os.time() < (egg.UnlocksAt or 0) then
+		personalFeedback(player, "EggNotReady", { ReadyAt = egg.UnlocksAt })
+		return
+	end
+
+	table.remove(profile.Eggs, eggIndex)
+	local pet = rollPet(egg.GuaranteedRare == true)
+	table.insert(profile.Pets, pet)
+
+	-- First pet auto-equips.
+	if not profile.EquippedPetId then
+		DataService.Set(player, "EquippedPetId", pet.Id)
+	end
+
+	personalFeedback(player, "PetHatched", { Pet = pet })
+	HatcheryService.SendSnapshot(player)
+	if Config.DebugVerboseLogging then
+		print(("[Hatchery] %s hatched %s (%s, %s, grip +%.1f%%)"):format(
+			player.Name, pet.Name, pet.Rarity, pet.Size, pet.GripBonus))
+	end
+end
+
+local function equipPet(player, petId)
+	local profile = DataService.GetProfile(player)
+	if not profile or type(petId) ~= "string" then
+		return
+	end
+	for _, pet in ipairs(profile.Pets) do
+		if pet.Id == petId then
+			DataService.Set(player, "EquippedPetId", petId)
+			HatcheryService.SendSnapshot(player)
+			return
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Grip bonus (CombatService consults this on would-be steals)
+---------------------------------------------------------------------------
+
+function HatcheryService.GetGripBonus(entity)
+	if entity == nil or not entity:IsA("Player") then
+		return 0 -- bots have no pets
+	end
+	local profile = DataService.GetProfile(entity)
+	if not profile or not profile.EquippedPetId then
+		return 0
+	end
+	for _, pet in ipairs(profile.Pets) do
+		if pet.Id == profile.EquippedPetId then
+			return math.min(pet.GripBonus or 0, Config.Pets.MaxGripBonus)
+		end
+	end
+	return 0
+end
+
+function HatcheryService.GetEquippedPet(player)
+	local profile = DataService.GetProfile(player)
+	if not profile or not profile.EquippedPetId then
+		return nil
+	end
+	for _, pet in ipairs(profile.Pets) do
+		if pet.Id == profile.EquippedPetId then
+			return pet
+		end
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- Init
+---------------------------------------------------------------------------
+
+function HatcheryService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	HatcheryRequest.OnServerEvent:Connect(function(player, action, id)
+		if type(action) ~= "string" then
+			return
+		end
+		if not DataService.IsLoaded(player) then
+			personalFeedback(player, "DataNotReady", {})
+			return
+		end
+		if action == "BuyEgg" then
+			buyEgg(player)
+		elseif action == "ConvertFragments" then
+			convertFragments(player)
+		elseif action == "OpenEgg" then
+			openEgg(player, id)
+		elseif action == "EquipPet" then
+			equipPet(player, id)
+		elseif action == "Refresh" then
+			HatcheryService.SendSnapshot(player)
+		end
+	end)
+
+	-- Send a snapshot as soon as each profile finishes loading.
+	DataService.OnProfileReady(function(player)
+		HatcheryService.SendSnapshot(player)
+	end)
+
+	print("[HatcheryService] Initialized: buy/convert/hatch/equip live")
+end
+
+function HatcheryService.DebugState()
+	local eggs, pets = 0, 0
+	for _, player in ipairs(Players:GetPlayers()) do
+		local profile = DataService.GetProfile(player)
+		if profile then
+			eggs = eggs + #profile.Eggs
+			pets = pets + #profile.Pets
+		end
+	end
+	return ("eggs-hatching=%d pets-owned=%d"):format(eggs, pets)
+end
+
+return HatcheryService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="Script" referent="RBX46">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">Main</string>
@@ -2099,30 +4228,34 @@ return EggService
 	===============================
 	Server bootstrap. Runs once when the server starts.
 
-	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service modules. As of Task 4, Egg, Combat, Scoring
-	     and Match are LIVE (full match loop: lobby -> countdown -> 3 rounds
-	     of 75s -> MVP + standings). Match initializes LAST because its state
-	     machine starts immediately and drives the other services. Only Data
-	     remains a reserved stub.
-	  3. Wires CombatService into EggService as the thrown-egg impact handler
-	     (dependency injection -- keeps the require graph one-directional).
-	  4. Creates the debug bridges (STUDIO ONLY, gated by
-	     Config.DebugAllowCommandBar):
+	  1. Creates ServerScriptService.ServerFeedback (BindableEvent) -- the
+	     server-side mirror of every FeedbackEvent (EconomyService counts
+	     knockdowns/steals through it). MUST exist before services init.
+	  2. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
+	  3. Initializes the service modules IN ORDER:
+	       Data -> Egg -> Combat -> Scoring -> Hatchery -> Economy
+	       -> Bots -> Matchmaking -> AntiCheat -> Match (last: its loop
+	          starts immediately and orchestrates everything).
+	  4. Cross-service wiring (dependency injection, one-directional graph):
+	       * EggService  -> CombatService.HandleEggImpact (thrown-egg hits)
+	       * MatchService-> EconomyService.ResetMatchStats / SettleMatch
+	       * HatcheryService <- DataService.OnProfileReady (snapshot push)
+	  5. Debug bridges (STUDIO ONLY, gated by Config.DebugAllowCommandBar):
 
-	     a) ReplicatedStorage.Remotes.DebugCommand (RemoteEvent) -- use this
-	        from the Studio command bar while PLAYING. The command bar runs in
-	        CLIENT context, which cannot see ServerScriptService children:
+	     a) ReplicatedStorage.Remotes.DebugCommand (RemoteEvent) -- from the
+	        Studio command bar while PLAYING (client context):
 
 	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")
-	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "PlayerName")
 	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")
 	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("grantegg")        -- mystery egg
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("grantegg", "rare")-- guaranteed rare
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("clout", "1000")   -- add clout
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("frags", "10")     -- add fragments
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("hatchnow")        -- finish hatch timers
 
-	     b) ServerScriptService.DebugCommands (BindableEvent) -- same commands
-	        from server-side code / "Run" mode:
-
-	          game.ServerScriptService.DebugCommands:Fire("fumble")
+	     b) ServerScriptService.DebugCommands (BindableEvent) -- same from
+	        server-side code / "Run" mode.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -2131,7 +4264,16 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 
--- 1) Verify remotes (static instances declared in default.project.json)
+-- 1) Server-side feedback mirror (created BEFORE any service initializes).
+local debugCommands = Instance.new("BindableEvent")
+debugCommands.Name = "DebugCommands"
+debugCommands.Parent = ServerScriptService
+
+local serverFeedback = Instance.new("BindableEvent")
+serverFeedback.Name = "ServerFeedback"
+serverFeedback.Parent = ServerScriptService
+
+-- 2) Verify remotes (static instances declared in default.project.json)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
 local EXPECTED_REMOTES = {
@@ -2150,6 +4292,10 @@ local EXPECTED_REMOTES = {
 	"RoundEnded",
 	"MatchEnded",
 	"FeedbackEvent",
+	-- meta layer (economy / hatchery)
+	"MatchRewards",
+	"HatcheryRequest",
+	"HatcheryUpdated",
 	-- studio-only debug bridge (see below)
 	"DebugCommand",
 }
@@ -2160,33 +4306,46 @@ for _, name in EXPECTED_REMOTES do
 	end
 end
 
--- 2) Require + initialize services
-local MatchService = require(ServerScriptService:WaitForChild("MatchService"))
+-- 3) Require + initialize services
+local DataService = require(ServerScriptService:WaitForChild("DataService"))
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
 local CombatService = require(ServerScriptService:WaitForChild("CombatService"))
 local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
-local DataService = require(ServerScriptService:WaitForChild("DataService"))
+local HatcheryService = require(ServerScriptService:WaitForChild("HatcheryService"))
+local EconomyService = require(ServerScriptService:WaitForChild("EconomyService"))
+local BotService = require(ServerScriptService:WaitForChild("BotService"))
+local MatchmakingService = require(ServerScriptService:WaitForChild("MatchmakingService"))
+local AntiCheatService = require(ServerScriptService:WaitForChild("AntiCheatService"))
+local MatchService = require(ServerScriptService:WaitForChild("MatchService"))
 
--- Init order matters: MatchService last -- its loop starts immediately and
--- orchestrates EggService (round spawns/pickup gating) and ScoringService
--- (round bookkeeping), which must already be live.
-for _, service in ipairs({ EggService, CombatService, ScoringService, MatchService, DataService }) do
+-- Init order matters: Data first (profiles feed everything meta), Match LAST
+-- (its state machine starts immediately and drives the other services).
+for _, service in ipairs({
+	DataService, EggService, CombatService, ScoringService,
+	HatcheryService, EconomyService, BotService, MatchmakingService,
+	AntiCheatService, MatchService,
+}) do
 	if type(service.Init) == "function" then
 		service.Init()
 	end
 end
 
--- 3) Cross-service wiring: EggService reports thrown-egg impacts,
---    CombatService applies the knockback. Injected here so neither module
---    has to require the other in both directions.
+-- 4) Cross-service wiring (dependency injection keeps requires acyclic).
 EggService.SetImpactHandler(function(player, eggVelocity)
 	CombatService.HandleEggImpact(player, eggVelocity)
 end)
+MatchService.SetMatchStartHandler(function()
+	EconomyService.ResetMatchStats()
+end)
+MatchService.SetMatchEndHandler(function(final)
+	EconomyService.SettleMatch(final)
+end)
 
--- 4) Debug bridges (Studio only)
-local function runDebugCommand(command, argument)
+-- 5) Debug bridges (Studio only)
+local function runDebugCommand(command, argument, player)
 	if typeof(command) ~= "string" then
-		warn('[Debug] usage: "fumble" | "respawn_egg" | "state" [, playerName]')
+		warn('[Debug] usage: "fumble" | "respawn_egg" | "state" | "grantegg" '
+			.. '| "clout" | "frags" | "hatchnow" [, argument]')
 		return
 	end
 	command = command:lower()
@@ -2199,8 +4358,38 @@ local function runDebugCommand(command, argument)
 		print("[Debug] egg   : " .. EggService.DebugState())
 		print("[Debug] combat: " .. CombatService.DebugState())
 		print("[Debug] score : " .. ScoringService.DebugState())
+		print("[Debug] bots  : " .. BotService.DebugState())
+		print("[Debug] data  : " .. DataService.DebugState())
+		print("[Debug] econ  : " .. EconomyService.DebugState())
+		print("[Debug] hatch : " .. HatcheryService.DebugState())
+		print("[Debug] queue : " .. MatchmakingService.DebugState())
+		print("[Debug] cheat : " .. AntiCheatService.DebugState())
+	elseif command == "grantegg" then
+		if player then
+			HatcheryService.GrantEgg(player, "Debug", argument == "rare")
+		end
+	elseif command == "clout" then
+		if player then
+			DataService.AddClout(player, tonumber(argument) or 1000)
+			HatcheryService.SendSnapshot(player)
+		end
+	elseif command == "frags" then
+		if player then
+			DataService.AddFragments(player, tonumber(argument) or 10)
+			HatcheryService.SendSnapshot(player)
+		end
+	elseif command == "hatchnow" then
+		if player then
+			local profile = DataService.GetProfile(player)
+			if profile then
+				for _, egg in ipairs(profile.Eggs) do
+					egg.UnlocksAt = os.time()
+				end
+				HatcheryService.SendSnapshot(player)
+			end
+		end
 	else
-		warn('[Debug] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
+		warn('[Debug] unknown command "' .. command .. '"')
 	end
 end
 
@@ -2212,26 +4401,188 @@ if debugRemote and debugRemote:IsA("RemoteEvent") then
 		if not (RunService:IsStudio() and Config.DebugAllowCommandBar) then
 			return -- never trust debug commands outside Studio
 		end
-		runDebugCommand(command, argument)
+		runDebugCommand(command, argument, player)
 	end)
 else
 	warn("[Main] Remotes.DebugCommand missing -- command-bar debugging unavailable")
 end
 
 -- b) BindableEvent path -- for server-side automation and "Run" mode.
-local debugCommands = Instance.new("BindableEvent")
-debugCommands.Name = "DebugCommands"
-debugCommands.Parent = ServerScriptService
-
 debugCommands.Event:Connect(function(command, argument)
-	runDebugCommand(command, argument)
+	runDebugCommand(command, argument, nil)
 end)
 
-print("[Clutch the Egg] Server bootstrap complete -- egg + combat + scoring + match loop live (Task 4)")
+print("[Clutch the Egg] Server bootstrap complete -- match + bots + economy + "
+	.. "hatchery + matchmaking + anti-cheat live (Tasks 6-7)")
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX39">
+<Item class="ModuleScript" referent="RBX47">
+<Properties>
+	<string name="Name">MatchmakingService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	MatchmakingService (ServerScriptService.MatchmakingService)
+	===========================================================
+	Simple in-server ELO queue. The server gathers up to
+	Config.MaxPlayers (6) players for the next match and prefers similar
+	skill:
+
+	  * Each waiting player has an ELO from DataService
+	    (Config.Matchmaking.DefaultElo for fresh profiles).
+	  * The queue SEED is the longest-waiting player. Everyone within
+	    BaseRange + WidenPerSecond * secondsWaited (capped at MaxRange) of
+	    the seed's ELO is eligible.
+	  * Once 6 are eligible (or the seed has waited MaxWaitSeconds, or the
+	    caller forces readiness -- bots fill the rest either way) the 6
+	    closest-to-seed players are selected; the others wait for the next
+	    match. With <= 6 players in the server (the normal case) everyone is
+	    always selected and BotService tops the match up to 6.
+
+	  * After each match, SettleMatch(final) applies EloByRank deltas to the
+	    real players (bots excluded) and saves via DataService.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local DataService = require(ServerScriptService:WaitForChild("DataService"))
+
+local MatchmakingService = {}
+
+local queueJoinedAt = {} -- { [Player] = os.clock() } arrival order for seeds
+local initialized = false
+
+local function now()
+	return os.clock()
+end
+
+local function getElo(player)
+	return DataService.GetElo(player) or Config.Matchmaking.DefaultElo
+end
+
+local function joinedAt(player)
+	local time = queueJoinedAt[player]
+	if not time then
+		time = now()
+		queueJoinedAt[player] = time
+	end
+	return time
+end
+
+--[[
+	MatchmakingService.SelectParticipants(candidates, forceReady)
+	  candidates : array of Players waiting in the lobby
+	  forceReady : true = the lobby grace has elapsed, pick NOW even if the
+	               skill window has not gathered 6 yet
+	Returns an array of up to Config.MaxPlayers Players (possibly everyone),
+]]
+function MatchmakingService.SelectParticipants(candidates, forceReady)
+	if #candidates <= Config.MaxPlayers then
+		return candidates -- normal case: everybody plays, bots fill the rest
+	end
+
+	-- Seed = longest waiting player.
+	local seed = candidates[1]
+	for _, player in ipairs(candidates) do
+		if joinedAt(player) < joinedAt(seed) then
+			seed = player
+		end
+	end
+	local seedElo = getElo(seed)
+	local waited = now() - joinedAt(seed)
+
+	-- Widen the acceptable ELO window the longer the queue waits.
+	local range = math.min(
+		Config.Matchmaking.MaxRange,
+		Config.Matchmaking.BaseRange + Config.Matchmaking.WidenPerSecond * waited)
+
+	local eligible = {}
+	for _, player in ipairs(candidates) do
+		if player == seed or math.abs(getElo(player) - seedElo) <= range then
+			table.insert(eligible, player)
+		end
+	end
+
+	if #eligible < Config.MaxPlayers and not forceReady
+		and waited < Config.Matchmaking.MaxWaitSeconds then
+		return nil -- keep queueing: window still widening
+	end
+
+	-- Take the seed + the closest ELOs (ties -> whoever arrived first).
+	table.sort(eligible, function(a, b)
+		local da, db = math.abs(getElo(a) - seedElo), math.abs(getElo(b) - seedElo)
+		if da ~= db then
+			return da < db
+		end
+		return joinedAt(a) < joinedAt(b)
+	end)
+	-- Keep the seed first regardless (it sorts to distance 0 anyway).
+	local selected = {}
+	for index = 1, math.min(Config.MaxPlayers, #eligible) do
+		table.insert(selected, eligible[index])
+	end
+	return selected
+end
+
+-- Applies ELO deltas from the final standings (bots/ghosts excluded).
+function MatchmakingService.SettleMatch(final)
+	if type(final) ~= "table" or type(final.Standings) ~= "table" then
+		return
+	end
+	for rank, entry in ipairs(final.Standings) do
+		local player = entry.Player
+		if player and player:IsA("Player") and player.Parent and not entry.Left then
+			local delta = Config.Matchmaking.EloByRank[rank] or 0
+			local old = getElo(player)
+			DataService.SetElo(player, old + delta)
+			if Config.DebugVerboseLogging then
+				print(("[Matchmaking] %s: ELO %d -> %d (rank %d, %+d)")
+					:format(player.Name, old, DataService.GetElo(player), rank, delta))
+			end
+		end
+	end
+end
+
+function MatchmakingService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	Players.PlayerAdded:Connect(function(player)
+		queueJoinedAt[player] = now()
+	end)
+	Players.PlayerRemoving:Connect(function(player)
+		queueJoinedAt[player] = nil
+	end)
+	for _, player in ipairs(Players:GetPlayers()) do
+		queueJoinedAt[player] = now()
+	end
+
+	print("[MatchmakingService] Initialized: ELO queue live (default "
+		.. Config.Matchmaking.DefaultElo .. ", widening window)")
+end
+
+function MatchmakingService.GetQueueInfo()
+	local parts = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		table.insert(parts, ("%s[%d]"):format(player.Name, getElo(player)))
+	end
+	table.sort(parts)
+	return #parts > 0 and table.concat(parts, ", ") or "(queue empty)"
+end
+
+function MatchmakingService.DebugState()
+	return "queue: " .. MatchmakingService.GetQueueInfo()
+end
+
+return MatchmakingService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX48">
 <Properties>
 	<string name="Name">MatchService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -2289,6 +4640,9 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
 local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
+local BotService = require(ServerScriptService:WaitForChild("BotService"))
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
+local MatchmakingService = require(ServerScriptService:WaitForChild("MatchmakingService"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
@@ -2302,6 +4656,8 @@ local currentRound = 0
 local loopStarted = false
 local lastStateData = nil -- last payload sent with setState (for late-joiner resync)
 local roundDeadline = nil -- os.clock() deadline of the running round (for resync TimeLeft)
+local matchStartHandler = nil -- injected by Main (EconomyService.ResetMatchStats)
+local matchEndHandler = nil   -- injected by Main (EconomyService.SettleMatch)
 
 local function now()
 	return os.clock()
@@ -2309,6 +4665,34 @@ end
 
 local function countPlayers()
 	return #Players:GetPlayers()
+end
+
+---------------------------------------------------------------------------
+-- Start conditions (bots + private servers)
+---------------------------------------------------------------------------
+
+local function isPrivateServer()
+	return Config.PrivateServers.Enabled
+		and game.PrivateServerId ~= nil and game.PrivateServerId ~= ""
+end
+
+-- How many REAL players are needed before a match may begin.
+local function requiredRealPlayers()
+	if isPrivateServer() then
+		return Config.PrivateServers.MinPlayersToStart -- friends server: solo ok
+	end
+	if Config.Bots.Enabled then
+		return 1 -- a lone player starts a match and gets bots
+	end
+	return Config.MinPlayersToStart -- legacy: 2+ humans, no bots
+end
+
+-- How long the lobby waits for more humans before bots fill the slots.
+local function lobbyGrace()
+	if isPrivateServer() then
+		return Config.PrivateServers.BotGraceSeconds
+	end
+	return Config.Bots.LobbyGraceSeconds
 end
 
 local function getRoundLength()
@@ -2354,6 +4738,7 @@ end
 local function waitForPlayers()
 	EggService.SetEnabled(false) -- no pickups in the lobby
 	local lastCount = -1
+	local firstHumanAt = nil
 	while true do
 		local count = countPlayers()
 		if count ~= lastCount then
@@ -2362,25 +4747,45 @@ local function waitForPlayers()
 				Players = count,
 				MinPlayersToStart = Config.MinPlayersToStart,
 				MaxPlayers = Config.MaxPlayers,
+				BotsEnabled = Config.Bots.Enabled,
+				PrivateServer = isPrivateServer(),
+				GraceSeconds = lobbyGrace(),
 			})
 		end
-		if count >= Config.MinPlayersToStart then
+		if count >= 1 and firstHumanAt == nil then
+			firstHumanAt = now()
+		elseif count == 0 then
+			firstHumanAt = nil
+		end
+
+		local ready = false
+		if count >= Config.MaxPlayers then
+			ready = true -- full house: start immediately
+		elseif count >= requiredRealPlayers() then
+			if not Config.Bots.Enabled then
+				ready = count >= Config.MinPlayersToStart -- legacy 2+ humans
+			elseif firstHumanAt and (now() - firstHumanAt) >= lobbyGrace() then
+				-- Grace elapsed: start now, bots fill the empty slots.
+				ready = true
+			end
+		end
+		if ready then
 			return
 		end
 		task.wait(0.5)
 	end
 end
 
--- Returns true when the countdown completed with enough players.
+-- Returns true when the countdown completed with enough REAL players.
 local function runCountdown()
 	for count = Config.RoundStartCountdown, 1, -1 do
-		if countPlayers() < Config.MinPlayersToStart then
+		if countPlayers() < requiredRealPlayers() then
 			return false
 		end
 		setState("Countdown", { StartsIn = count })
 		task.wait(1)
 	end
-	if countPlayers() < Config.MinPlayersToStart then
+	if countPlayers() < requiredRealPlayers() then
 		return false
 	end
 	setState("Countdown", { StartsIn = 0 }) -- GO!
@@ -2457,6 +4862,35 @@ local function playRound(roundNumber)
 end
 
 local function playMatch()
+	-- 1) Pick the roster: ELO queue when >MaxPlayers humans are waiting,
+	--    otherwise everyone plays. Then fill empty slots with bots.
+	local humans = MatchmakingService.SelectParticipants(Players:GetPlayers(), true)
+	if not humans or #humans == 0 then
+		humans = Players:GetPlayers()
+	end
+	if #humans == 0 then
+		return -- everyone left between countdown and kickoff: back to lobby
+	end
+	local chosenSet = {}
+	for _, player in ipairs(humans) do
+		chosenSet[player] = true
+	end
+	-- Non-chosen humans (>MaxPlayers servers) spectate this match: they can
+	-- still move around but cannot touch the egg, be hit, or be scored.
+	BotRegistry.SetAllowedFilter(function(player)
+		return chosenSet[player] == true
+	end)
+
+	local botCount = 0
+	if Config.Bots.Enabled and Config.Bots.FillToMaxPlayers then
+		botCount = math.min(Config.Bots.MaxBots, Config.MaxPlayers - #humans)
+	end
+	BotService.SpawnBots(botCount)
+	print(("[Match] Match starting: %d human(s) + %d bot(s)"):format(#humans, botCount))
+	if matchStartHandler then
+		task.spawn(matchStartHandler, humans, botCount)
+	end
+
 	currentRound = 1
 	ScoringService.ResetMatch()
 	EggService.ResetHoldTimes()
@@ -2469,6 +4903,12 @@ local function playMatch()
 	-- Match over: MVP + final standings.
 	local final = ScoringService.GetFinalStandings()
 	MatchEnded:FireAllClients(final)
+
+	-- Meta layer: Clout + fragments + pity (EconomyService), then ELO.
+	if matchEndHandler then
+		task.spawn(matchEndHandler, final)
+	end
+	MatchmakingService.SettleMatch(final)
 
 	print("[Match] ================= MATCH OVER =================")
 	if #final.MVPNames > 0 then
@@ -2492,6 +4932,10 @@ local function playMatch()
 		NextLobbyIn = Config.IntermissionLength,
 	})
 	task.wait(Config.IntermissionLength)
+
+	-- Cleanup: bots leave, roster filter off (everyone is lobby-eligible).
+	BotService.DespawnAll()
+	BotRegistry.SetAllowedFilter(nil)
 end
 
 ---------------------------------------------------------------------------
@@ -2526,16 +4970,27 @@ function MatchService.GetRound()
 	return currentRound
 end
 
+-- Main injects the meta-layer hooks so MatchService never requires
+-- EconomyService directly (keeps the dependency graph one-directional).
+function MatchService.SetMatchStartHandler(fn)
+	matchStartHandler = (typeof(fn) == "function") and fn or nil
+end
+
+function MatchService.SetMatchEndHandler(fn)
+	matchEndHandler = (typeof(fn) == "function") and fn or nil
+end
+
 function MatchService.DebugState()
-	return ("state=%s round=%d/%d players=%d"):format(
-		currentState, currentRound, Config.RoundsPerMatch, countPlayers())
+	return ("state=%s round=%d/%d players=%d bots=%d private=%s"):format(
+		currentState, currentRound, Config.RoundsPerMatch, countPlayers(),
+		BotRegistry.CountBots(), tostring(isPrivateServer()))
 end
 
 return MatchService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX40">
+<Item class="ModuleScript" referent="RBX49">
 <Properties>
 	<string name="Name">ScoringService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -2575,6 +5030,9 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 -- One-directional dependency: Scoring reads possession from EggService.
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
+-- Participants = real Players + bot Models (bots can win rounds and MVP,
+-- they just earn no currency -- EconomyService pays Players only).
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
 
 local ScoringService = {}
 
@@ -2687,16 +5145,16 @@ function ScoringService.EndRound()
 		matchTimes[player] = (matchTimes[player] or 0) + time
 	end
 
-	-- Ranked entries for everyone still in the server.
+	-- Ranked entries for everyone in the match (players + bots).
 	local entries = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+	for _, entity in ipairs(BotRegistry.GetParticipants()) do
 		table.insert(entries, {
-			Player = player,
-			Name = player.Name,
-			UserId = player.UserId,
-			RoundTime = roundTimes[player] or 0,
-			MatchTime = matchTimes[player] or 0,
-			RoundsWon = roundsWon[player] or 0,
+			Player = entity,
+			Name = entity.Name,
+			UserId = BotRegistry.GetUserId(entity),
+			RoundTime = roundTimes[entity] or 0,
+			MatchTime = matchTimes[entity] or 0,
+			RoundsWon = roundsWon[entity] or 0,
 		})
 	end
 	table.sort(entries, function(a, b)
@@ -2741,13 +5199,13 @@ end
 ]]
 function ScoringService.GetFinalStandings()
 	local standings = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+	for _, entity in ipairs(BotRegistry.GetParticipants()) do
 		table.insert(standings, {
-			Player = player,
-			Name = player.Name,
-			UserId = player.UserId,
-			TotalHoldTime = matchTimes[player] or 0,
-			RoundsWon = roundsWon[player] or 0,
+			Player = entity,
+			Name = entity.Name,
+			UserId = BotRegistry.GetUserId(entity),
+			TotalHoldTime = matchTimes[entity] or 0,
+			RoundsWon = roundsWon[entity] or 0,
 			Left = false,
 		})
 	end
@@ -2833,26 +5291,153 @@ return ScoringService
 </Properties>
 </Item>
 </Item>
-<Item class="ServerStorage" referent="RBX41">
+<Item class="ServerStorage" referent="RBX50">
 <Properties>
 	<string name="Name">ServerStorage</string>
 </Properties>
 </Item>
-<Item class="SoundService" referent="RBX42">
+<Item class="SoundService" referent="RBX51">
 <Properties>
 	<string name="Name">Sound</string>
 </Properties>
 </Item>
-<Item class="StarterGui" referent="RBX43">
+<Item class="StarterGui" referent="RBX52">
 <Properties>
 	<string name="Name">StarterGui</string>
 </Properties>
-<Item class="ScreenGui" referent="RBX44">
+<Item class="ScreenGui" referent="RBX53">
 <Properties>
 	<string name="Name">CTEGui</string>
 	<bool name="ResetOnSpawn">false</bool>
 </Properties>
-<Item class="LocalScript" referent="RBX45">
+<Item class="ModuleScript" referent="RBX54">
+<Properties>
+	<string name="Name">ControlsPanel</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	ControlsPanel (ModuleScript inside StarterGui.CTEGui)
+	=====================================================
+	The ONLY thing on screen in the lobby: a small, unobtrusive, collapsible
+	controls list parked on the right side of the screen (no full-screen
+	menus -- the match starts automatically).
+
+	Api:
+	  ControlsPanel.Create(parentGui) -> panel
+	  panel:SetCollapsed(bool)
+]]
+
+local UiKit = require(script.Parent:WaitForChild("UiKit"))
+
+local ControlsPanel = {}
+ControlsPanel.__index = ControlsPanel
+
+local HEADER_HEIGHT = 0.05
+local PANEL_WIDTH = 0.235
+
+-- key, action pairs (keyboard/gamepad; mobile uses the on-screen buttons).
+local CONTROLS = {
+	{ "LMB · X", "Attack (no egg)" },
+	{ "Q F · Y", "Throw (has egg)" },
+	{ "RMB · L1", "Block (hold)" },
+	{ "E · R1", "Dash" },
+	{ "Shift · R2", "Sprint (hold)" },
+	{ "Space", "Jump" },
+}
+
+function ControlsPanel.Create(parentGui)
+	local self = setmetatable({}, ControlsPanel)
+
+	self.root = UiKit.frame({
+		Name = "ControlsPanel",
+		Size = UDim2.fromScale(PANEL_WIDTH, 0.05 + 0.052 * (#CONTROLS + 1)),
+		Position = UDim2.fromScale(1 - PANEL_WIDTH - 0.012, 0.30),
+		BackgroundColor3 = UiKit.Theme.Panel,
+		BackgroundTransparency = 0.3,
+	}, parentGui)
+
+	-- Header doubles as the collapse toggle.
+	self.header = UiKit.button({
+		Name = "Header",
+		Size = UDim2.fromScale(1, HEADER_HEIGHT / self.root.Size.Y.Scale),
+		Text = "CONTROLS  –",
+		BackgroundColor3 = UiKit.Theme.Panel,
+		BackgroundTransparency = 0.15,
+		Font = UiKit.Theme.FontMain,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.root)
+	UiKit.padding(self.header, 0.06)
+
+	self.body = UiKit.frame({
+		Name = "Body",
+		Size = UDim2.fromScale(1, 1 - HEADER_HEIGHT / self.root.Size.Y.Scale),
+		Position = UDim2.fromScale(0, HEADER_HEIGHT / self.root.Size.Y.Scale),
+		BackgroundTransparency = 1,
+	}, self.root)
+
+	local rowHeight = 0.9 / #CONTROLS
+	for index, control in ipairs(CONTROLS) do
+		local rowY = (index - 1) * rowHeight
+		UiKit.label({
+			Name = "Key" .. index,
+			Size = UDim2.fromScale(0.42, rowHeight * 0.8),
+			Position = UDim2.fromScale(0.04, rowY + rowHeight * 0.1),
+			Text = control[1],
+			Font = UiKit.Theme.FontMain,
+			TextColor3 = UiKit.Theme.Accent,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, self.body)
+		UiKit.label({
+			Name = "Action" .. index,
+			Size = UDim2.fromScale(0.52, rowHeight * 0.8),
+			Position = UDim2.fromScale(0.46, rowY + rowHeight * 0.1),
+			Text = control[2],
+			Font = UiKit.Theme.FontSoft,
+			TextColor3 = UiKit.Theme.TextDim,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, self.body)
+	end
+
+	UiKit.label({
+		Name = "Footer",
+		Size = UDim2.fromScale(0.92, rowHeight * 0.8),
+		Position = UDim2.fromScale(0.04, #CONTROLS * rowHeight + rowHeight * 0.1),
+		Text = "Touch the egg to grab it!",
+		Font = UiKit.Theme.FontSoft,
+		TextColor3 = UiKit.Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.body)
+
+	self.collapsed = false
+	self.expandedHeight = HEADER_HEIGHT + 0.052 * (#CONTROLS + 1)
+	self.headerFraction = HEADER_HEIGHT / self.expandedHeight
+	self.header.Activated:Connect(function()
+		self:SetCollapsed(not self.collapsed)
+	end)
+
+	return self
+end
+
+function ControlsPanel:SetCollapsed(collapsed)
+	self.collapsed = collapsed
+	self.body.Visible = not collapsed
+	self.header.Text = collapsed and "CONTROLS  +" or "CONTROLS  –"
+	self.root.Size = collapsed
+		and UDim2.fromScale(PANEL_WIDTH, HEADER_HEIGHT)
+		or UDim2.fromScale(PANEL_WIDTH, self.expandedHeight)
+	-- Collapsed: the header IS the whole panel. Expanded: just the top strip.
+	self.header.Size = collapsed
+		and UDim2.fromScale(1, 1)
+		or UDim2.fromScale(1, self.headerFraction)
+end
+
+function ControlsPanel:SetVisible(visible)
+	self.root.Visible = visible
+end
+
+return ControlsPanel
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="LocalScript" referent="RBX55">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">GuiMain</string>
@@ -2862,18 +5447,22 @@ return ScoringService
 	Builds and routes the whole GUI. Runs once per player (PlayerGui copy of
 	the StarterGui screen, ResetOnSpawn = false), so it survives respawns.
 
+	Layout philosophy: NO full-screen menus. The HUD is always up; the lobby
+	is just the idle HUD + a small collapsible CONTROLS panel + a HATCHERY
+	button. Matches start automatically (bots fill empty slots), results
+	panels overlay the HUD, and toasts report rewards.
+
 	Data sources (NO game logic is duplicated here -- everything is state read
 	from the server):
-	  MatchStateChanged  -> which screen is visible, round clock, countdown
+	  MatchStateChanged  -> timer/round/status line, countdown, screen flow
 	  RoundEnded         -> round-end results panel
 	  MatchEnded         -> match-end results panel (MVP + standings)
-	  HoldTimeUpdated    -> hold-time board rows
+	  MatchRewards       -> "+Clout / +Fragments" toast (personal)
+	  HoldTimeUpdated    -> hold-time board rows (players AND bots)
 	  EggPossessionChanged -> carrier highlight
-	  FeedbackEvent      -> steal feed toasts + cooldown wipes (from SUCCESS
-	                        events like PunchSwing/DashStart, so keyboard and
-	                        button users both see them)
-	  Player attributes  -> HasEgg (button context states), Stamina (bar +
-	                        dash availability)
+	  HatcheryUpdated    -> hatchery panel snapshot
+	  FeedbackEvent      -> steal/grip feed + cooldown wipes + pet/egg toasts
+	  Player attributes  -> HasEgg (button context states), Stamina (bar/dash)
 
 	Buttons call _G.CTEInput (exposed by ClientInput) which fires the Request*
 	RemoteEvents; the server validates everything.
@@ -2888,9 +5477,12 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
 local RoundEnded = Remotes:WaitForChild("RoundEnded")
 local MatchEnded = Remotes:WaitForChild("MatchEnded")
+local MatchRewards = Remotes:WaitForChild("MatchRewards")
 local HoldTimeUpdated = Remotes:WaitForChild("HoldTimeUpdated")
 local EggPossessionChanged = Remotes:WaitForChild("EggPossessionChanged")
 local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
+local HatcheryRequest = Remotes:WaitForChild("HatcheryRequest")
+local HatcheryUpdated = Remotes:WaitForChild("HatcheryUpdated")
 
 -- Fallbacks if _G.CTEInput is not ready yet (should never happen mid-match).
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
@@ -2900,10 +5492,11 @@ local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
 
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
-local LobbyScreen = require(script.Parent:WaitForChild("LobbyScreen"))
+local ControlsPanel = require(script.Parent:WaitForChild("ControlsPanel"))
 local HudScreen = require(script.Parent:WaitForChild("HudScreen"))
 local ResultsScreens = require(script.Parent:WaitForChild("ResultsScreens"))
 local SettingsPanel = require(script.Parent:WaitForChild("SettingsPanel"))
+local HatcheryPanel = require(script.Parent:WaitForChild("HatcheryPanel"))
 
 local player = Players.LocalPlayer
 local gui = script.Parent -- the CTEGui ScreenGui (already in PlayerGui)
@@ -2918,15 +5511,18 @@ end)
 ---------------------------------------------------------------------------
 
 local hud = HudScreen.Create(gui)
-local lobby = LobbyScreen.Create(gui)
 local results = ResultsScreens.Create(gui)
 local settings = SettingsPanel.Create(gui)
+local controls = ControlsPanel.Create(gui)
+local hatchery = HatcheryPanel.Create(gui) -- above controls: it is an overlay
 
--- Info toast (top-center, under the timer) for placeholder/flow messages.
+hud:SetVisible(true) -- the HUD is always up now (idle in the lobby)
+
+-- Info toast (top-center, under the timer) for rewards/flow messages.
 local toastFrame = UiKit.frame({
 	Name = "Toasts",
-	Size = UDim2.fromScale(0.5, 0.12),
-	Position = UDim2.fromScale(0.25, 0.14),
+	Size = UDim2.fromScale(0.5, 0.16),
+	Position = UDim2.fromScale(0.25, 0.18),
 	BackgroundTransparency = 1,
 }, gui)
 UiKit.listLayout(toastFrame, Enum.FillDirection.Vertical, 0.02,
@@ -2935,7 +5531,7 @@ UiKit.listLayout(toastFrame, Enum.FillDirection.Vertical, 0.02,
 local function toast(message, color)
 	local label = UiKit.frame({
 		Name = "Toast",
-		Size = UDim2.fromScale(1, 0.4),
+		Size = UDim2.fromScale(1, 0.3),
 		BackgroundColor3 = UiKit.Theme.Panel,
 		BackgroundTransparency = 0.1,
 	}, toastFrame)
@@ -2948,7 +5544,7 @@ local function toast(message, color)
 		TextWrapped = true,
 	}, label)
 
-	task.delay(2.6, function()
+	task.delay(3.2, function()
 		if label.Parent then
 			UiKit.tween(label, 0.4, { BackgroundTransparency = 1 })
 			for _, child in ipairs(label:GetChildren()) do
@@ -2991,17 +5587,8 @@ end
 hud.OnSettings = function()
 	settings:Toggle()
 end
-lobby.OnSettings = function()
-	settings:Toggle()
-end
-
-lobby.OnPlay = function()
-	toast(("Matches start automatically at %d+ players — ready-up coming soon!")
-		:format(Config.MinPlayersToStart), UiKit.Theme.Info)
-end
-lobby.OnMode2v2v2 = function()
-	toast("2v2v2 is a placeholder for now — team mode arrives in a later update!",
-		UiKit.Theme.Info)
+hud.OnHatchery = function()
+	hatchery:Toggle()
 end
 
 results.OnPlayAgain = function()
@@ -3022,30 +5609,43 @@ local function applyState(stateName, data)
 	currentState = stateName
 	data = data or {}
 
-	lobby:SetVisible(stateName == "Lobby")
-	hud:SetVisible(stateName ~= "Lobby")
-
 	if stateName == "Lobby" then
-		lobby:SetPlayerCount(data.Players or #Players:GetPlayers())
 		results:HideRoundEnd()
 		results:HideMatchEnd()
+		hud.timerLabel.Text = "--"
+		hud.countdownLabel.Visible = false
+		hud.roundLabel.Text = "Lobby"
+		controls:SetCollapsed(false)
+		if data.BotsEnabled then
+			hud:SetStatus("Waiting for players… bots fill empty slots")
+		elseif data.PrivateServer then
+			hud:SetStatus("Private server — start when ready")
+		else
+			hud:SetStatus(("Need %d+ players to start"):format(
+				data.MinPlayersToStart or Config.MinPlayersToStart))
+		end
 	elseif stateName == "Countdown" then
 		results:HideRoundEnd()
 		results:HideMatchEnd()
+		controls:SetCollapsed(true)
+		hud:SetStatus("")
 		hud:ShowCountdown(data.StartsIn or 3)
 	elseif stateName == "RoundPlaying" then
 		results:HideRoundEnd()
 		results:HideMatchEnd()
 		matchEndPayload = nil
+		hud:SetStatus("")
 		if data.Round then
 			hud:SetRoundInfo(data.Round, data.RoundsPerMatch)
 		end
 		hud:SetTimeLeft(data.TimeLeft)
 	elseif stateName == "RoundEnd" then
 		results:HideMatchEnd()
+		hud:SetStatus("Round over")
 		-- panel content arrives via RoundEnded (fired just before this state)
 	elseif stateName == "MatchEnd" then
 		results:HideRoundEnd()
+		hud:SetStatus("Match over")
 		if matchEndPayload then
 			results:ShowMatchEnd(matchEndPayload)
 		end
@@ -3076,7 +5676,37 @@ EggPossessionChanged.OnClientEvent:Connect(function(newCarrier)
 end)
 
 ---------------------------------------------------------------------------
--- FeedbackEvent: steal feed + cooldown wipes (success events only)
+-- Meta layer: rewards toast + hatchery snapshot
+---------------------------------------------------------------------------
+
+MatchRewards.OnClientEvent:Connect(function(rewards)
+	if type(rewards) ~= "table" then
+		return
+	end
+	toast(("Match rewards: +%d Clout, +%d Fragments (rank #%d)")
+		:format(rewards.Clout or 0, rewards.Fragments or 0, rewards.Rank or 0),
+		UiKit.Theme.Accent)
+	if rewards.IsMVP then
+		toast("MVP bonus: +" .. Config.Economy.CloutMVPBonus .. " Clout ★", UiKit.Theme.Good)
+	end
+	if rewards.PityEgg or rewards.EggGranted then
+		toast("PITY UNLOCKED: a guaranteed-RARE egg was granted! Check the hatchery.",
+			UiKit.Theme.Info)
+	end
+	if Config.DebugVerboseLogging then
+		print(("[CTE] rewards: clout=+%d frags=+%d kd=%d steals=%d hold=%ds rank=%d mvp=%s pity=%s")
+			:format(rewards.Clout or 0, rewards.Fragments or 0, rewards.Knockdowns or 0,
+				rewards.Steals or 0, rewards.HoldSeconds or 0, rewards.Rank or 0,
+				tostring(rewards.IsMVP), tostring(rewards.PityEgg)))
+	end
+end)
+
+HatcheryUpdated.OnClientEvent:Connect(function(snapshot)
+	hatchery:SetSnapshot(snapshot)
+end)
+
+---------------------------------------------------------------------------
+-- FeedbackEvent: feed + toasts + cooldown wipes (success events only)
 ---------------------------------------------------------------------------
 
 FeedbackEvent.OnClientEvent:Connect(function(kind, data)
@@ -3089,6 +5719,9 @@ FeedbackEvent.OnClientEvent:Connect(function(kind, data)
 		local attacker = UiKit.playerName(data.Attacker, "?")
 		local victim = UiKit.playerName(data.Victim, "?")
 		hud:PushFeed(("%s stole the egg from %s!"):format(attacker, victim), UiKit.Theme.Accent)
+	elseif kind == "GripSave" then
+		hud:PushFeed(("%s's pet GRIPPED the egg!"):format(
+			UiKit.playerName(data.Player, "?")), UiKit.Theme.Good)
 	elseif kind == "EggPickup" then
 		hud:PushFeed(("%s grabbed the egg!"):format(UiKit.playerName(data.Player, "?")),
 			UiKit.Theme.Good)
@@ -3100,6 +5733,27 @@ FeedbackEvent.OnClientEvent:Connect(function(kind, data)
 			UiKit.Theme.Bad)
 	elseif kind == "EggOutOfBounds" then
 		hud:PushFeed("The egg flew out of the arena — respawning…", UiKit.Theme.Bad)
+	end
+
+	-- Personal toasts (meta layer).
+	if kind == "PetHatched" and data.Pet then
+		local pet = data.Pet
+		toast(("You hatched %s! (%s · %s · grip +%.1f%%)"):format(
+			pet.Name or "a pet", pet.Rarity or "?", pet.Size or "?", pet.GripBonus or 0),
+			UiKit.Theme.Accent)
+	elseif kind == "EggGranted" then
+		toast("You received an egg! Open it in the HATCHERY when it hatches.",
+			UiKit.Theme.Info)
+	elseif kind == "NotEnoughClout" then
+		toast(("Not enough Clout (need %d, have %d)"):format(data.Need or 0, data.Have or 0),
+			UiKit.Theme.Bad)
+	elseif kind == "NotEnoughFragments" then
+		toast(("Not enough fragments (need %d, have %d)"):format(data.Need or 0, data.Have or 0),
+			UiKit.Theme.Bad)
+	elseif kind == "EggNotReady" then
+		toast("That egg is still hatching…", UiKit.Theme.Bad)
+	elseif kind == "DataNotReady" then
+		toast("Your profile is still loading — try again in a second.", UiKit.Theme.Info)
 	end
 
 	-- Cooldown wipes for the LOCAL player, driven by server success events.
@@ -3131,26 +5785,394 @@ refreshStamina()
 
 ---------------------------------------------------------------------------
 -- Initial state (the server resyncs us via MatchStateChanged shortly after
--- join if a match is already running)
+-- join if a match is already running, and pushes a HatcheryUpdated snapshot
+-- as soon as the profile loads)
 ---------------------------------------------------------------------------
 
-lobby:SetPlayerCount(#Players:GetPlayers())
-Players.PlayerAdded:Connect(function()
-	if currentState == "Lobby" then
-		lobby:SetPlayerCount(#Players:GetPlayers())
-	end
+applyState("Lobby", { BotsEnabled = Config.Bots.Enabled })
+task.delay(2, function()
+	HatcheryRequest:FireServer("Refresh")
 end)
-Players.PlayerRemoving:Connect(function()
-	if currentState == "Lobby" then
-		lobby:SetPlayerCount(#Players:GetPlayers() - 1)
-	end
-end)
-
-applyState("Lobby", { Players = #Players:GetPlayers() })
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX46">
+<Item class="ModuleScript" referent="RBX56">
+<Properties>
+	<string name="Name">HatcheryPanel</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	HatcheryPanel (ModuleScript inside StarterGui.CTEGui)
+	=====================================================
+	The meta-game panel, opened from the small HATCHERY button:
+
+	  * Wallet row: Clout, Fragments (x/10), pity progress.
+	  * BUY EGG (Clout) / CONVERT 10 FRAGMENTS buttons.
+	  * Eggs in progress: hatch countdowns (computed from the server
+	    snapshot's Now), OPEN button when ready.
+	  * Pet collection: rarity-colored rows with size/mutation/grip and
+	    EQUIP buttons (one equipped pet = its tiny capped grip bonus).
+
+	Pure presentation + request buttons: every action goes through the
+	HatcheryRequest RemoteEvent and the SERVER validates + answers with a
+	fresh HatcheryUpdated snapshot. Nothing is computed locally except the
+	countdown display.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local UiKit = require(script.Parent:WaitForChild("UiKit"))
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local HatcheryRequest = Remotes:WaitForChild("HatcheryRequest")
+
+local HatcheryPanel = {}
+HatcheryPanel.__index = HatcheryPanel
+
+local RARITY_COLORS = {
+	Common = Color3.fromRGB(158, 164, 180),
+	Rare = Color3.fromRGB(95, 170, 255),
+	Epic = Color3.fromRGB(180, 100, 255),
+	Legendary = Color3.fromRGB(255, 165, 60),
+	Mythic = Color3.fromRGB(255, 85, 120),
+}
+
+local function request(action, id)
+	HatcheryRequest:FireServer(action, id)
+end
+
+local function clearChildren(container)
+	for _, child in ipairs(container:GetChildren()) do
+		if not child:IsA("UIListLayout") then
+			child:Destroy()
+		end
+	end
+end
+
+function HatcheryPanel.Create(parentGui)
+	local self = setmetatable({}, HatcheryPanel)
+	self.snapshot = nil
+	self.receivedAt = 0
+
+	self.scrim = UiKit.scrim(parentGui, 0.5)
+	self.scrim.Name = "HatcheryScrim"
+	self.scrim.Visible = false
+
+	self.panel = UiKit.frame({
+		Name = "HatcheryPanel",
+		Size = UDim2.fromScale(0.58, 0.74),
+		Position = UDim2.fromScale(0.21, 0.13),
+		BackgroundColor3 = UiKit.Theme.Panel,
+		Visible = false,
+	}, parentGui)
+	UiKit.stroke(self.panel, UiKit.Theme.AccentDark, 3)
+
+	UiKit.label({
+		Name = "Title",
+		Size = UDim2.fromScale(0.6, 0.075),
+		Position = UDim2.fromScale(0.04, 0.02),
+		Text = "HATCHERY",
+		Font = UiKit.Theme.FontTitle,
+		TextColor3 = UiKit.Theme.Accent,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.panel)
+
+	self.closeButton = UiKit.button({
+		Name = "Close",
+		Size = UDim2.fromScale(0.07, 0.06),
+		Position = UDim2.fromScale(0.91, 0.02),
+		Text = "X",
+	}, self.panel)
+	self.closeButton.Activated:Connect(function()
+		self:SetVisible(false)
+	end)
+	self.scrim.InputBegan:Connect(function(input)
+		if UiKit.isPress(input) then
+			self:SetVisible(false)
+		end
+	end)
+
+	-- Wallet row
+	self.walletLabel = UiKit.label({
+		Name = "Wallet",
+		Size = UDim2.fromScale(0.92, 0.05),
+		Position = UDim2.fromScale(0.04, 0.10),
+		Text = "Loading…",
+		Font = UiKit.Theme.FontMain,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.panel)
+
+	-- Action buttons
+	self.buyButton = UiKit.button({
+		Name = "BuyEgg",
+		Size = UDim2.fromScale(0.44, 0.065),
+		Position = UDim2.fromScale(0.04, 0.165),
+		Text = ("BUY EGG — %d CLOUT"):format(Config.Economy.EggCloutCost),
+	}, self.panel)
+	self.buyButton.Activated:Connect(function()
+		request("BuyEgg")
+	end)
+
+	self.convertButton = UiKit.button({
+		Name = "ConvertFragments",
+		Size = UDim2.fromScale(0.44, 0.065),
+		Position = UDim2.fromScale(0.52, 0.165),
+		Text = ("CONVERT %d FRAGMENTS"):format(Config.Economy.EggFragmentCost),
+	}, self.panel)
+	self.convertButton.Activated:Connect(function()
+		request("ConvertFragments")
+	end)
+
+	-- Eggs section
+	UiKit.label({
+		Name = "EggsHeader",
+		Size = UDim2.fromScale(0.92, 0.04),
+		Position = UDim2.fromScale(0.04, 0.245),
+		Text = "EGGS",
+		Font = UiKit.Theme.FontMain,
+		TextColor3 = UiKit.Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.panel)
+
+	self.eggsFrame = UiKit.new("ScrollingFrame", {
+		Name = "Eggs",
+		Size = UDim2.fromScale(0.92, 0.17),
+		Position = UDim2.fromScale(0.04, 0.285),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.fromScale(0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+	}, self.panel)
+	UiKit.listLayout(self.eggsFrame, Enum.FillDirection.Vertical, 0.04)
+
+	-- Pets section
+	self.petsHeader = UiKit.label({
+		Name = "PetsHeader",
+		Size = UDim2.fromScale(0.92, 0.04),
+		Position = UDim2.fromScale(0.04, 0.47),
+		Text = "PETS",
+		Font = UiKit.Theme.FontMain,
+		TextColor3 = UiKit.Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.panel)
+
+	self.petsFrame = UiKit.new("ScrollingFrame", {
+		Name = "Pets",
+		Size = UDim2.fromScale(0.92, 0.40),
+		Position = UDim2.fromScale(0.04, 0.51),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		CanvasSize = UDim2.fromScale(0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+	}, self.panel)
+	UiKit.listLayout(self.petsFrame, Enum.FillDirection.Vertical, 0.025)
+
+	self.noteLabel = UiKit.label({
+		Name = "Note",
+		Size = UDim2.fromScale(0.92, 0.035),
+		Position = UDim2.fromScale(0.04, 0.945),
+		Text = "",
+		Font = UiKit.Theme.FontSoft,
+		TextColor3 = UiKit.Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, self.panel)
+
+	-- 1 Hz countdown refresh while open.
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if self.panel.Visible and self.snapshot then
+				self:renderEggs()
+			end
+		end
+	end)
+
+	return self
+end
+
+---------------------------------------------------------------------------
+-- Rendering
+---------------------------------------------------------------------------
+
+function HatcheryPanel:serverNow()
+	-- Snapshot's Now + time elapsed on this client since it arrived.
+	return (self.snapshot and self.snapshot.Now or os.time())
+		+ math.floor(tick() - self.receivedAt)
+end
+
+function HatcheryPanel:renderEggs()
+	local snap = self.snapshot
+	if not snap then
+		return
+	end
+	clearChildren(self.eggsFrame)
+
+	if #snap.Eggs == 0 then
+		UiKit.label({
+			Size = UDim2.fromScale(1, 0.4),
+			Text = "No eggs yet — buy one or convert fragments!",
+			Font = UiKit.Theme.FontSoft,
+			TextColor3 = UiKit.Theme.TextDim,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, self.eggsFrame)
+		return
+	end
+
+	local serverNow = self:serverNow()
+	for _, egg in ipairs(snap.Eggs) do
+		local row = UiKit.frame({
+			Name = "Egg_" .. tostring(egg.Id),
+			Size = UDim2.fromScale(1, 0.4),
+			BackgroundColor3 = UiKit.Theme.PanelAlt,
+			BackgroundTransparency = 0.35,
+		}, self.eggsFrame)
+
+		local title = egg.GuaranteedRare and "RARE Egg" or "Mystery Egg"
+		UiKit.label({
+			Size = UDim2.fromScale(0.5, 0.7),
+			Position = UDim2.fromScale(0.03, 0.15),
+			Text = ("%s  <font color='#9ea4b4'>(%s)</font>"):format(title, tostring(egg.Source)),
+			Font = UiKit.Theme.FontMain,
+			TextColor3 = egg.GuaranteedRare and RARITY_COLORS.Rare or UiKit.Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+
+		local remaining = (egg.UnlocksAt or 0) - serverNow
+		if remaining > 0 then
+			UiKit.label({
+				Size = UDim2.fromScale(0.4, 0.7),
+				Position = UDim2.fromScale(0.57, 0.15),
+				Text = ("hatching… %d:%02d"):format(
+					math.floor(remaining / 60), remaining % 60),
+				Font = UiKit.Theme.FontSoft,
+				TextColor3 = UiKit.Theme.TextDim,
+				TextXAlignment = Enum.TextXAlignment.Right,
+			}, row)
+		else
+			local openButton = UiKit.button({
+				Size = UDim2.fromScale(0.38, 0.72),
+				Position = UDim2.fromScale(0.59, 0.14),
+				Text = "OPEN",
+				TextColor3 = UiKit.Theme.Background,
+			}, row)
+			openButton.BackgroundColor3 = UiKit.Theme.Accent
+			openButton.Activated:Connect(function()
+				request("OpenEgg", egg.Id)
+			end)
+		end
+	end
+end
+
+function HatcheryPanel:renderPets()
+	local snap = self.snapshot
+	if not snap then
+		return
+	end
+	clearChildren(self.petsFrame)
+	self.petsHeader.Text = ("PETS (%d)"):format(#snap.Pets)
+
+	if #snap.Pets == 0 then
+		UiKit.label({
+			Size = UDim2.fromScale(1, 0.15),
+			Text = "No pets yet — hatch an egg!",
+			Font = UiKit.Theme.FontSoft,
+			TextColor3 = UiKit.Theme.TextDim,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, self.petsFrame)
+		return
+	end
+
+	for _, pet in ipairs(snap.Pets) do
+		local row = UiKit.frame({
+			Name = "Pet_" .. tostring(pet.Id),
+			Size = UDim2.fromScale(1, 0.2),
+			BackgroundColor3 = UiKit.Theme.PanelAlt,
+			BackgroundTransparency = 0.35,
+		}, self.petsFrame)
+
+		UiKit.label({
+			Size = UDim2.fromScale(0.42, 0.7),
+			Position = UDim2.fromScale(0.03, 0.15),
+			Text = pet.Name or "?",
+			Font = UiKit.Theme.FontMain,
+			TextColor3 = RARITY_COLORS[pet.Rarity] or UiKit.Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+
+		local details = pet.Rarity .. " · " .. tostring(pet.Size)
+		if pet.Mutation then
+			details = details .. " · " .. pet.Mutation
+		end
+		details = details .. (" · grip +%.1f%%"):format(pet.GripBonus or 0)
+		UiKit.label({
+			Size = UDim2.fromScale(0.36, 0.7),
+			Position = UDim2.fromScale(0.44, 0.15),
+			Text = details,
+			Font = UiKit.Theme.FontSoft,
+			TextColor3 = UiKit.Theme.TextDim,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+
+		local equipped = (snap.EquippedPetId == pet.Id)
+		local equipButton = UiKit.button({
+			Size = UDim2.fromScale(0.16, 0.72),
+			Position = UDim2.fromScale(0.82, 0.14),
+			Text = equipped and "ON" or "EQUIP",
+		}, row)
+		if equipped then
+			equipButton.BackgroundColor3 = UiKit.Theme.Good
+			equipButton.TextColor3 = UiKit.Theme.Background
+			equipButton.AutoButtonColor = false
+		else
+			equipButton.Activated:Connect(function()
+				request("EquipPet", pet.Id)
+			end)
+		end
+	end
+end
+
+function HatcheryPanel:SetSnapshot(snapshot)
+	self.snapshot = snapshot
+	self.receivedAt = tick()
+	if not snapshot then
+		self.walletLabel.Text = "Loading…"
+		return
+	end
+	self.walletLabel.Text = ("Clout: %d    Fragments: %d/%d    Pity: %d/%d"):format(
+		snapshot.Clout, snapshot.Fragments, Config.Economy.EggFragmentCost,
+		snapshot.PityProgress and snapshot.PityProgress.SinceRoundWin or 0,
+		snapshot.PityProgress and snapshot.PityProgress.Needed
+			or Config.Economy.PityMatchesWithoutRoundWin)
+	self.noteLabel.Text = snapshot.StoreOK and ""
+		or "Data is TEMPORARY this session (DataStore unavailable)."
+	if self.panel.Visible then
+		self:renderEggs()
+		self:renderPets()
+	end
+end
+
+function HatcheryPanel:SetVisible(visible)
+	self.scrim.Visible = visible
+	self.panel.Visible = visible
+	if visible then
+		self:renderEggs()
+		self:renderPets()
+		request("Refresh") -- make sure we show fresh numbers
+	end
+end
+
+function HatcheryPanel:Toggle()
+	self:SetVisible(not self.panel.Visible)
+end
+
+return HatcheryPanel
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX57">
 <Properties>
 	<string name="Name">HudScreen</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -3180,6 +6202,7 @@ applyState("Lobby", { Players = #Players:GetPlayers() })
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
@@ -3196,6 +6219,7 @@ function HudScreen.Create(parentGui)
 
 	self.OnAbility = nil   -- GuiMain sets: function(abilityName, isDown)
 	self.OnSettings = nil
+	self.OnHatchery = nil
 
 	self.carrier = nil
 	self.holdTimes = {}    -- { [Player] = seconds } from HoldTimeUpdated
@@ -3227,6 +6251,16 @@ function HudScreen.Create(parentGui)
 		Size = UDim2.fromScale(0.24, 0.035),
 		Position = UDim2.fromScale(0.38, 0.10),
 		Text = ("Round -/%d"):format(Config.RoundsPerMatch),
+		Font = UiKit.Theme.FontSoft,
+		TextColor3 = UiKit.Theme.TextDim,
+	}, self.root)
+
+	-- Lobby/flow status line (sits between the board and the corner buttons).
+	self.statusLabel = UiKit.label({
+		Name = "Status",
+		Size = UDim2.fromScale(0.32, 0.035),
+		Position = UDim2.fromScale(0.34, 0.138),
+		Text = "",
 		Font = UiKit.Theme.FontSoft,
 		TextColor3 = UiKit.Theme.TextDim,
 	}, self.root)
@@ -3370,9 +6404,38 @@ function HudScreen.Create(parentGui)
 		if self.OnSettings then self.OnSettings() end
 	end)
 
+	-- Small hatchery button (the meta layer lives behind one click, not a
+	-- full-screen lobby).
+	self.hatcheryButton = UiKit.button({
+		Name = "HatcheryButton",
+		Size = UDim2.fromScale(0.09, 0.055),
+		Position = UDim2.fromScale(0.805, 0.025),
+		Text = "HATCHERY",
+	}, self.root)
+	self.hatcheryButton.Activated:Connect(function()
+		if self.OnHatchery then self.OnHatchery() end
+	end)
+
 	-- Keep the roster rows fresh as players come and go.
 	Players.PlayerAdded:Connect(function() self:refreshBoard() end)
 	Players.PlayerRemoving:Connect(function() self:refreshBoard() end)
+
+	-- Bots join/leave via Workspace.Bots (created by the server on demand).
+	local function watchBotsFolder(folder)
+		folder.ChildAdded:Connect(function() self:refreshBoard() end)
+		folder.ChildRemoved:Connect(function() self:refreshBoard() end)
+	end
+	local botsFolder = Workspace:FindFirstChild("Bots")
+	if botsFolder then
+		watchBotsFolder(botsFolder)
+	else
+		Workspace.ChildAdded:Connect(function(child)
+			if child.Name == "Bots" then
+				watchBotsFolder(child)
+			end
+		end)
+	end
+
 	self:refreshBoard()
 
 	return self
@@ -3512,6 +6575,11 @@ function HudScreen:SetVisible(visible)
 	self.root.Visible = visible
 end
 
+-- Small one-line status under the timer ("Waiting for players…", etc).
+function HudScreen:SetStatus(text)
+	self.statusLabel.Text = text or ""
+end
+
 function HudScreen:SetRoundInfo(roundNumber, roundsPerMatch)
 	self.roundLabel.Text = ("Round %d/%d"):format(roundNumber, roundsPerMatch or Config.RoundsPerMatch)
 end
@@ -3572,13 +6640,37 @@ function HudScreen:refreshBoard()
 	local localPlayer = Players.LocalPlayer
 
 	-- Display list: players with hold time first (desc), then the rest of the
-	-- roster, then empty arena slots.
+	-- roster (INCLUDING bots from Workspace.Bots), then empty arena slots.
 	local list = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+	local seen = {}
+	local function addEntity(entity)
+		if entity == nil or seen[entity] then
+			return
+		end
+		if typeof(entity) == "Instance" and not entity.Parent then
+			return -- despawned bot / left player
+		end
+		seen[entity] = true
 		table.insert(list, {
-			player = player,
-			time = self.holdTimes[player] or 0,
+			player = entity,
+			time = self.holdTimes[entity] or 0,
 		})
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		addEntity(player)
+	end
+	local botsFolder = Workspace:FindFirstChild("Bots")
+	if botsFolder then
+		for _, model in ipairs(botsFolder:GetChildren()) do
+			if model:IsA("Model") then
+				addEntity(model)
+			end
+		end
+	end
+	-- Anyone still holding time (e.g. a bot that just despawned mid-push).
+	for entity in pairs(self.holdTimes) do
+		addEntity(entity)
 	end
 	table.sort(list, function(a, b)
 		if math.abs(a.time - b.time) > 0.005 then
@@ -3677,175 +6769,7 @@ return HudScreen
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX47">
-<Properties>
-	<string name="Name">LobbyScreen</string>
-	<ProtectedString name="Source"><![CDATA[--[[
-	LobbyScreen (ModuleScript inside StarterGui.CTEGui)
-	===================================================
-	The lobby screen: title, Play button, mode selector (FFA / 2v2v2),
-	player count and a settings button.
-
-	Presentation only -- the server decides when the match actually starts
-	(MatchService auto-counts-down at MinPlayersToStart). The Play button and
-	the 2v2v2 mode are placeholders that surface a toast via callbacks.
-
-	Api:
-	  LobbyScreen.Create(parentGui) -> screen
-	  screen:SetVisible(bool)
-	  screen:SetPlayerCount(count)
-	  screen.OnPlay / screen.OnMode2v2v2 / screen.OnSettings   (callbacks)
-]]
-
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
-local UiKit = require(script.Parent:WaitForChild("UiKit"))
-
-local LobbyScreen = {}
-LobbyScreen.__index = LobbyScreen
-
-function LobbyScreen.Create(parentGui)
-	local self = setmetatable({}, LobbyScreen)
-
-	self.OnPlay = nil
-	self.OnMode2v2v2 = nil
-	self.OnSettings = nil
-
-	self.root = UiKit.frame({
-		Name = "LobbyScreen",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = UiKit.Theme.Background,
-	}, parentGui)
-
-	-- Title block
-	UiKit.label({
-		Name = "Title",
-		Size = UDim2.fromScale(0.9, 0.14),
-		Position = UDim2.fromScale(0.05, 0.10),
-		Text = "CLUTCH THE EGG",
-		Font = UiKit.Theme.FontTitle,
-		TextColor3 = UiKit.Theme.Accent,
-	}, self.root)
-
-	UiKit.label({
-		Name = "Subtitle",
-		Size = UDim2.fromScale(0.9, 0.05),
-		Position = UDim2.fromScale(0.05, 0.245),
-		Text = "Grab the egg. Hold it. Don't get caught.",
-		Font = UiKit.Theme.FontSoft,
-		TextColor3 = UiKit.Theme.TextDim,
-	}, self.root)
-
-	-- Play button
-	self.playButton = UiKit.button({
-		Name = "PlayButton",
-		Size = UDim2.fromScale(0.36, 0.10),
-		Position = UDim2.fromScale(0.32, 0.42),
-		Text = "PLAY",
-		TextColor3 = UiKit.Theme.Background,
-	}, self.root)
-	self.playButton.BackgroundColor3 = UiKit.Theme.Accent
-	UiKit.stroke(self.playButton, UiKit.Theme.AccentDark, 3)
-
-	self.playHint = UiKit.label({
-		Name = "PlayHint",
-		Size = UDim2.fromScale(0.6, 0.035),
-		Position = UDim2.fromScale(0.2, 0.53),
-		Text = ("Auto-starts at %d+ players"):format(Config.MinPlayersToStart),
-		Font = UiKit.Theme.FontSoft,
-		TextColor3 = UiKit.Theme.TextDim,
-	}, self.root)
-
-	-- Mode selector (FFA selected; 2v2v2 is a placeholder)
-	self.modeFrame = UiKit.frame({
-		Name = "ModeSelector",
-		Size = UDim2.fromScale(0.36, 0.07),
-		Position = UDim2.fromScale(0.32, 0.60),
-		BackgroundColor3 = UiKit.Theme.Panel,
-	}, self.root)
-
-	self.ffaButton = UiKit.button({
-		Name = "FFA",
-		Size = UDim2.fromScale(0.48, 0.84),
-		Position = UDim2.fromScale(0.01, 0.08),
-		Text = "FFA",
-	}, self.modeFrame)
-
-	self.teamButton = UiKit.button({
-		Name = "Teams",
-		Size = UDim2.fromScale(0.48, 0.84),
-		Position = UDim2.fromScale(0.51, 0.08),
-		Text = "2v2v2",
-		TextColor3 = UiKit.Theme.TextDim,
-	}, self.modeFrame)
-
-	self:refreshModeButtons()
-
-	-- Player count
-	self.countLabel = UiKit.label({
-		Name = "PlayerCount",
-		Size = UDim2.fromScale(0.5, 0.055),
-		Position = UDim2.fromScale(0.25, 0.72),
-		Text = ("Players: 0/%d"):format(Config.MaxPlayers),
-		Font = UiKit.Theme.FontMain,
-	}, self.root)
-
-	-- Controls hint (desktop testers)
-	UiKit.label({
-		Name = "ControlsHint",
-		Size = UDim2.fromScale(0.94, 0.035),
-		Position = UDim2.fromScale(0.03, 0.93),
-		Text = "LMB attack  ·  Q/F throw  ·  RMB block (hold)  ·  E dash  ·  Shift sprint (hold)",
-		Font = UiKit.Theme.FontSoft,
-		TextColor3 = UiKit.Theme.TextDim,
-	}, self.root)
-
-	-- Settings button (top right)
-	self.settingsButton = UiKit.button({
-		Name = "SettingsButton",
-		Size = UDim2.fromScale(0.075, 0.055),
-		Position = UDim2.fromScale(0.905, 0.025),
-		Text = "SET",
-	}, self.root)
-
-	-- Wiring
-	self.playButton.Activated:Connect(function()
-		if self.OnPlay then self.OnPlay() end
-	end)
-	self.teamButton.Activated:Connect(function()
-		if self.OnMode2v2v2 then self.OnMode2v2v2() end
-	end)
-	self.ffaButton.Activated:Connect(function()
-		self:refreshModeButtons() -- FFA is the only live mode for now
-	end)
-	self.settingsButton.Activated:Connect(function()
-		if self.OnSettings then self.OnSettings() end
-	end)
-
-	return self
-end
-
-function LobbyScreen:refreshModeButtons()
-	self.ffaButton.BackgroundColor3 = UiKit.Theme.Accent
-	self.ffaButton.TextColor3 = UiKit.Theme.Background
-	self.teamButton.BackgroundColor3 = UiKit.Theme.Button
-	self.teamButton.TextColor3 = UiKit.Theme.TextDim
-end
-
-function LobbyScreen:SetVisible(visible)
-	self.root.Visible = visible
-end
-
-function LobbyScreen:SetPlayerCount(count)
-	self.countLabel.Text = ("Players: %d/%d"):format(count or 0, Config.MaxPlayers)
-end
-
-return LobbyScreen
-]]></ProtectedString>
-</Properties>
-</Item>
-<Item class="ModuleScript" referent="RBX48">
+<Item class="ModuleScript" referent="RBX58">
 <Properties>
 	<string name="Name">ResultsScreens</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -4164,7 +7088,7 @@ return ResultsScreens
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX49">
+<Item class="ModuleScript" referent="RBX59">
 <Properties>
 	<string name="Name">SettingsPanel</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -4336,7 +7260,7 @@ return SettingsPanel
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX50">
+<Item class="ModuleScript" referent="RBX60">
 <Properties>
 	<string name="Name">UiKit</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -4498,12 +7422,27 @@ end
 -- Misc
 ---------------------------------------------------------------------------
 
--- Display-friendly player name (instances may be nil in ghost standings).
+-- Display-friendly name for any participant. Handles Players, bot Models
+-- (Workspace.Bots -- prefer the Humanoid DisplayName, tag them as bots) and
+-- nil (ghost standings fall back to the stored name).
 function UiKit.playerName(playerOrNil, fallbackName)
 	if playerOrNil then
-		local displayName = playerOrNil.DisplayName
-		if displayName and displayName ~= "" then
-			return displayName
+		if playerOrNil:IsA("Player") then
+			local displayName = playerOrNil.DisplayName
+			if displayName and displayName ~= "" then
+				return displayName
+			end
+			return playerOrNil.Name
+		end
+		local humanoid = playerOrNil:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			local displayName = humanoid.DisplayName
+			if displayName and displayName ~= "" then
+				if humanoid:GetAttribute("IsBot") then
+					return displayName .. " (bot)"
+				end
+				return displayName
+			end
 		end
 		return playerOrNil.Name
 	end
@@ -4522,20 +7461,20 @@ return UiKit
 </Item>
 </Item>
 </Item>
-<Item class="StarterPack" referent="RBX51">
+<Item class="StarterPack" referent="RBX61">
 <Properties>
 	<string name="Name">StarterPack</string>
 </Properties>
 </Item>
-<Item class="StarterPlayer" referent="RBX52">
+<Item class="StarterPlayer" referent="RBX62">
 <Properties>
 	<string name="Name">StarterPlayer</string>
 </Properties>
-<Item class="StarterCharacterScripts" referent="RBX53">
+<Item class="StarterCharacterScripts" referent="RBX63">
 <Properties>
 	<string name="Name">StarterCharacterScripts</string>
 </Properties>
-<Item class="LocalScript" referent="RBX54">
+<Item class="LocalScript" referent="RBX64">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">Animations</string>
@@ -4661,7 +7600,7 @@ updateCarryLoop()
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="LocalScript" referent="RBX55">
+<Item class="LocalScript" referent="RBX65">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">ClientInput</string>
@@ -4861,7 +7800,7 @@ end)
 </Properties>
 </Item>
 </Item>
-<Item class="StarterPlayerScripts" referent="RBX56">
+<Item class="StarterPlayerScripts" referent="RBX66">
 <Properties>
 	<string name="Name">StarterPlayerScripts</string>
 </Properties>

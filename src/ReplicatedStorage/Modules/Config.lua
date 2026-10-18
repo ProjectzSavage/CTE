@@ -25,7 +25,7 @@ local Config = {}
 -- Match flow
 --------------------------------------------------------------------------
 Config.MaxPlayers = 6            -- hard player cap for the arena
-Config.MinPlayersToStart = 2     -- countdown starts at 2+ players (bots may fill in later)
+Config.MinPlayersToStart = 2     -- humans needed to start without bots (bots can start at 1; private servers at 1)
 Config.RoundLength = 75          -- seconds per round
 Config.RoundsPerMatch = 3        -- best of 3
 Config.RoundsToWinMatch = 2      -- first to 2 round wins takes the match
@@ -163,6 +163,143 @@ Config.Animations = {
 	Block = "",  -- looped while blocking  ("BlockStart"/"BlockEnd")
 	Sprint = "", -- looped while sprinting ("SprintStart"/"SprintEnd")
 	Carry = "",  -- looped while holding the egg (HasEgg attribute)
+}
+
+--------------------------------------------------------------------------
+-- Data / persistence (DataService)
+--------------------------------------------------------------------------
+Config.Data = {
+	StoreName = "CTE_PlayerData_v1",
+	AutoSaveSeconds = 60,        -- periodic save for every loaded profile
+	LoadRetries = 3,             -- attempts before falling back to a temp profile
+	SaveRetries = 2,
+	RetryDelaySeconds = 2,
+	-- Studio testing: keep false -> profiles live in a memory table (still
+	-- persist across rejoins inside the same Studio session, and the real
+	-- DataStore code path is used in production builds).
+	UseRealStoreInStudio = false,
+}
+
+--------------------------------------------------------------------------
+-- Economy: Clout (soft currency) + Egg Fragments (EconomyService)
+--------------------------------------------------------------------------
+-- Clout is awarded once per completed match:
+--   participation + hold seconds + knockdowns/steals + round wins + MVP.
+-- Fragments are ranked: top 3 hold times earn more, ranks 4-6 still earn
+-- some (never zero). 10 fragments convert into 1 egg in the Hatchery.
+Config.Economy = {
+	StartingClout = 150,
+	CloutParticipation = 25,     -- finishing a match at all
+	CloutPerHoldSecond = 1,      -- per second of MATCH hold time
+	CloutPerKnockdown = 5,       -- per punch that connected ("Hit")
+	CloutPerSteal = 8,           -- per egg steal (punch or dash-fumble)
+	CloutPerRoundWin = 30,
+	CloutMVPBonus = 100,
+	MaxKnockdownsCredited = 40,  -- caps per match (anti-farm)
+	MaxStealsCredited = 40,
+	FragmentsByRank = { 5, 4, 3, 2, 2, 1 }, -- rank 1..6, never zero
+	EggCloutCost = 250,          -- Hatchery: buy one egg with Clout
+	EggFragmentCost = 10,        -- Hatchery: convert 10 fragments into one egg
+	HatchTimeSeconds = 45,       -- every egg has a hatch timer
+	PityMatchesWithoutRoundWin = 10, -- after this many winless matches the
+	                                 -- NEXT round win grants a guaranteed-rare egg
+}
+
+--------------------------------------------------------------------------
+-- Pets (HatcheryService) -- flex value + a TINY capped bonus. Not pay-to-win.
+--------------------------------------------------------------------------
+Config.Pets = {
+	-- Hatch roll weights (relative; renormalized automatically).
+	RarityWeights = { Common = 60, Rare = 25, Epic = 10, Legendary = 4, Mythic = 1 },
+	-- Pity / guaranteed-rare eggs roll from this table instead.
+	RareGuaranteedWeights = { Rare = 70, Epic = 20, Legendary = 8, Mythic = 2 },
+	Species = { "Egglings", "Shellbeast", "Yolkling", "Chirp", "Ovodile", "Scramble" },
+	Sizes = { "Small", "Medium", "Large", "Giant" },
+	MutationChance = 0.1,        -- 10% of pets hatch with a mutation
+	Mutations = { "Golden", "Neon", "Void", "Rainbow", "Crystal" },
+	-- Grip = % chance to HOLD ON when a punch would knock the egg loose.
+	-- Intentionally tiny and capped: a Mythic pet is ~3% luckier, not stronger.
+	GripByRarity = { Common = 0.5, Rare = 1, Epic = 1.5, Legendary = 2, Mythic = 3 },
+	MaxGripBonus = 3,
+	MaxEquipped = 1,             -- trading/multi-equip comes later
+}
+
+--------------------------------------------------------------------------
+-- Bots (BotService) -- fill empty slots so matches start with <6 humans.
+--------------------------------------------------------------------------
+Config.Bots = {
+	Enabled = true,
+	FillToMaxPlayers = true,     -- top every match up to Config.MaxPlayers
+	MaxBots = 5,
+	LobbyGraceSeconds = 8,       -- lobby waits this long for humans, then fills with bots
+	TickRate = 5,                -- AI decisions per second (per bot)
+	WalkSpeed = 14,              -- slower than humans (16): beatable
+	CarrySpeed = 11,             -- slower than humans carrying (12)
+	ReactionTime = 0.35,         -- min seconds between decisions: beatable
+	AttackRange = 6,             -- punch reach (slightly generous: not useless)
+	AttackCooldown = 1.1,        -- vs human 0.6: beatable
+	PunchKnockback = 20,         -- vs human 25: bot hits are softer
+	PunchUpward = 6,
+	Aggression = 0.55,           -- 0..1: how often a hunting bot commits to a punch
+	ThrowChance = 0.25,          -- chance per decision to throw while carrying & hunted
+	ThrowRange = 25,             -- enemies within this range tempt a throw
+	RoamRetargetSeconds = 3,     -- carriers pick a fresh random spot this often
+	StunTime = 0.4,              -- stagger when a bot gets punched
+	RespawnY = -30,              -- knocked out of the arena -> respawn on the ring
+	Elo = 900,                   -- skill hint used by matchmaking display only
+	Names = { "Rex", "Kev", "Ziggy", "Nova", "Bolt", "Mochi", "Turbo", "Pixel" },
+	Colors = { "Bright red", "Bright blue", "Bright green", "Bright yellow",
+		"Bright violet", "Bright orange", "Cyan", "Lime green" },
+}
+
+--------------------------------------------------------------------------
+-- Matchmaking (MatchmakingService) -- in-server ELO queue.
+--------------------------------------------------------------------------
+-- The server gathers up to 6 players for the next match, preferring similar
+-- ELO. If the queue is slow the acceptable range widens over time; after
+-- MaxWaitSeconds it takes the closest available players regardless.
+Config.Matchmaking = {
+	DefaultElo = 1000,
+	MinElo = 100,
+	MaxElo = 3000,
+	BaseRange = 150,             -- starting ELO window around the queue seed
+	MaxRange = 1000,
+	WidenPerSecond = 25,         -- window grows while the seed waits
+	MaxWaitSeconds = 20,         -- after this, force-fill with whoever is closest
+	EloByRank = { 25, 12, 4, -4, -12, -20 }, -- rank 1..6 delta after a match
+}
+
+--------------------------------------------------------------------------
+-- Anti-cheat (AntiCheatService) -- server-side validation & speed-hack net.
+--------------------------------------------------------------------------
+-- Ability requests are ALREADY validated by CombatService (cooldown,
+-- stamina, contextual egg rule, server-computed ranges/targets -- no client
+-- position is ever trusted). This adds:
+--   * horizontal speed sampling: faster than the max legitimate speed
+--     (walk + sprint + dash + tolerance) for several consecutive samples
+--     -> teleport back to the last valid position, log, strike.
+--   * ability-request rate limiting (remote spam) -> strike.
+--   * MaxStrikes -> kick.
+Config.AntiCheat = {
+	Enabled = true,
+	SampleRate = 10,             -- position samples per second per player
+	SpeedTolerance = 10,         -- studs/s of slack above the max legitimate speed
+	ConsecutiveSamples = 3,      -- fast samples in a row before acting
+	MaxStrikes = 5,
+	SpawnGraceSeconds = 2,       -- ignore movement right after (re)spawn
+	MaxAbilityRequestsPerSecond = 15,
+	LogViolations = true,
+}
+
+--------------------------------------------------------------------------
+-- Private servers (VIP servers)
+--------------------------------------------------------------------------
+-- Friends-only servers start faster: 1 human is enough (bots fill the rest)
+-- with a shorter grace window for friends to trickle in.
+Config.PrivateServers = {
+	Enabled = true,
+	MinPlayersToStart = 1,
+	BotGraceSeconds = 3,
 }
 
 --------------------------------------------------------------------------

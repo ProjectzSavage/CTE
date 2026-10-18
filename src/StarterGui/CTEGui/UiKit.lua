@@ -157,12 +157,27 @@ end
 -- Misc
 ---------------------------------------------------------------------------
 
--- Display-friendly player name (instances may be nil in ghost standings).
+-- Display-friendly name for any participant. Handles Players, bot Models
+-- (Workspace.Bots -- prefer the Humanoid DisplayName, tag them as bots) and
+-- nil (ghost standings fall back to the stored name).
 function UiKit.playerName(playerOrNil, fallbackName)
 	if playerOrNil then
-		local displayName = playerOrNil.DisplayName
-		if displayName and displayName ~= "" then
-			return displayName
+		if playerOrNil:IsA("Player") then
+			local displayName = playerOrNil.DisplayName
+			if displayName and displayName ~= "" then
+				return displayName
+			end
+			return playerOrNil.Name
+		end
+		local humanoid = playerOrNil:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			local displayName = humanoid.DisplayName
+			if displayName and displayName ~= "" then
+				if humanoid:GetAttribute("IsBot") then
+					return displayName .. " (bot)"
+				end
+				return displayName
+			end
 		end
 		return playerOrNil.Name
 	end

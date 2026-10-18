@@ -25,6 +25,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local UiKit = require(script.Parent:WaitForChild("UiKit"))
@@ -41,6 +42,7 @@ function HudScreen.Create(parentGui)
 
 	self.OnAbility = nil   -- GuiMain sets: function(abilityName, isDown)
 	self.OnSettings = nil
+	self.OnHatchery = nil
 
 	self.carrier = nil
 	self.holdTimes = {}    -- { [Player] = seconds } from HoldTimeUpdated
@@ -72,6 +74,16 @@ function HudScreen.Create(parentGui)
 		Size = UDim2.fromScale(0.24, 0.035),
 		Position = UDim2.fromScale(0.38, 0.10),
 		Text = ("Round -/%d"):format(Config.RoundsPerMatch),
+		Font = UiKit.Theme.FontSoft,
+		TextColor3 = UiKit.Theme.TextDim,
+	}, self.root)
+
+	-- Lobby/flow status line (sits between the board and the corner buttons).
+	self.statusLabel = UiKit.label({
+		Name = "Status",
+		Size = UDim2.fromScale(0.32, 0.035),
+		Position = UDim2.fromScale(0.34, 0.138),
+		Text = "",
 		Font = UiKit.Theme.FontSoft,
 		TextColor3 = UiKit.Theme.TextDim,
 	}, self.root)
@@ -215,9 +227,38 @@ function HudScreen.Create(parentGui)
 		if self.OnSettings then self.OnSettings() end
 	end)
 
+	-- Small hatchery button (the meta layer lives behind one click, not a
+	-- full-screen lobby).
+	self.hatcheryButton = UiKit.button({
+		Name = "HatcheryButton",
+		Size = UDim2.fromScale(0.09, 0.055),
+		Position = UDim2.fromScale(0.805, 0.025),
+		Text = "HATCHERY",
+	}, self.root)
+	self.hatcheryButton.Activated:Connect(function()
+		if self.OnHatchery then self.OnHatchery() end
+	end)
+
 	-- Keep the roster rows fresh as players come and go.
 	Players.PlayerAdded:Connect(function() self:refreshBoard() end)
 	Players.PlayerRemoving:Connect(function() self:refreshBoard() end)
+
+	-- Bots join/leave via Workspace.Bots (created by the server on demand).
+	local function watchBotsFolder(folder)
+		folder.ChildAdded:Connect(function() self:refreshBoard() end)
+		folder.ChildRemoved:Connect(function() self:refreshBoard() end)
+	end
+	local botsFolder = Workspace:FindFirstChild("Bots")
+	if botsFolder then
+		watchBotsFolder(botsFolder)
+	else
+		Workspace.ChildAdded:Connect(function(child)
+			if child.Name == "Bots" then
+				watchBotsFolder(child)
+			end
+		end)
+	end
+
 	self:refreshBoard()
 
 	return self
@@ -357,6 +398,11 @@ function HudScreen:SetVisible(visible)
 	self.root.Visible = visible
 end
 
+-- Small one-line status under the timer ("Waiting for players…", etc).
+function HudScreen:SetStatus(text)
+	self.statusLabel.Text = text or ""
+end
+
 function HudScreen:SetRoundInfo(roundNumber, roundsPerMatch)
 	self.roundLabel.Text = ("Round %d/%d"):format(roundNumber, roundsPerMatch or Config.RoundsPerMatch)
 end
@@ -417,13 +463,37 @@ function HudScreen:refreshBoard()
 	local localPlayer = Players.LocalPlayer
 
 	-- Display list: players with hold time first (desc), then the rest of the
-	-- roster, then empty arena slots.
+	-- roster (INCLUDING bots from Workspace.Bots), then empty arena slots.
 	local list = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+	local seen = {}
+	local function addEntity(entity)
+		if entity == nil or seen[entity] then
+			return
+		end
+		if typeof(entity) == "Instance" and not entity.Parent then
+			return -- despawned bot / left player
+		end
+		seen[entity] = true
 		table.insert(list, {
-			player = player,
-			time = self.holdTimes[player] or 0,
+			player = entity,
+			time = self.holdTimes[entity] or 0,
 		})
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		addEntity(player)
+	end
+	local botsFolder = Workspace:FindFirstChild("Bots")
+	if botsFolder then
+		for _, model in ipairs(botsFolder:GetChildren()) do
+			if model:IsA("Model") then
+				addEntity(model)
+			end
+		end
+	end
+	-- Anyone still holding time (e.g. a bot that just despawned mid-push).
+	for entity in pairs(self.holdTimes) do
+		addEntity(entity)
 	end
 	table.sort(list, function(a, b)
 		if math.abs(a.time - b.time) > 0.005 then

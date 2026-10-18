@@ -53,6 +53,9 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
 local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
+local BotService = require(ServerScriptService:WaitForChild("BotService"))
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
+local MatchmakingService = require(ServerScriptService:WaitForChild("MatchmakingService"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
@@ -66,6 +69,8 @@ local currentRound = 0
 local loopStarted = false
 local lastStateData = nil -- last payload sent with setState (for late-joiner resync)
 local roundDeadline = nil -- os.clock() deadline of the running round (for resync TimeLeft)
+local matchStartHandler = nil -- injected by Main (EconomyService.ResetMatchStats)
+local matchEndHandler = nil   -- injected by Main (EconomyService.SettleMatch)
 
 local function now()
 	return os.clock()
@@ -73,6 +78,34 @@ end
 
 local function countPlayers()
 	return #Players:GetPlayers()
+end
+
+---------------------------------------------------------------------------
+-- Start conditions (bots + private servers)
+---------------------------------------------------------------------------
+
+local function isPrivateServer()
+	return Config.PrivateServers.Enabled
+		and game.PrivateServerId ~= nil and game.PrivateServerId ~= ""
+end
+
+-- How many REAL players are needed before a match may begin.
+local function requiredRealPlayers()
+	if isPrivateServer() then
+		return Config.PrivateServers.MinPlayersToStart -- friends server: solo ok
+	end
+	if Config.Bots.Enabled then
+		return 1 -- a lone player starts a match and gets bots
+	end
+	return Config.MinPlayersToStart -- legacy: 2+ humans, no bots
+end
+
+-- How long the lobby waits for more humans before bots fill the slots.
+local function lobbyGrace()
+	if isPrivateServer() then
+		return Config.PrivateServers.BotGraceSeconds
+	end
+	return Config.Bots.LobbyGraceSeconds
 end
 
 local function getRoundLength()
@@ -118,6 +151,7 @@ end
 local function waitForPlayers()
 	EggService.SetEnabled(false) -- no pickups in the lobby
 	local lastCount = -1
+	local firstHumanAt = nil
 	while true do
 		local count = countPlayers()
 		if count ~= lastCount then
@@ -126,25 +160,45 @@ local function waitForPlayers()
 				Players = count,
 				MinPlayersToStart = Config.MinPlayersToStart,
 				MaxPlayers = Config.MaxPlayers,
+				BotsEnabled = Config.Bots.Enabled,
+				PrivateServer = isPrivateServer(),
+				GraceSeconds = lobbyGrace(),
 			})
 		end
-		if count >= Config.MinPlayersToStart then
+		if count >= 1 and firstHumanAt == nil then
+			firstHumanAt = now()
+		elseif count == 0 then
+			firstHumanAt = nil
+		end
+
+		local ready = false
+		if count >= Config.MaxPlayers then
+			ready = true -- full house: start immediately
+		elseif count >= requiredRealPlayers() then
+			if not Config.Bots.Enabled then
+				ready = count >= Config.MinPlayersToStart -- legacy 2+ humans
+			elseif firstHumanAt and (now() - firstHumanAt) >= lobbyGrace() then
+				-- Grace elapsed: start now, bots fill the empty slots.
+				ready = true
+			end
+		end
+		if ready then
 			return
 		end
 		task.wait(0.5)
 	end
 end
 
--- Returns true when the countdown completed with enough players.
+-- Returns true when the countdown completed with enough REAL players.
 local function runCountdown()
 	for count = Config.RoundStartCountdown, 1, -1 do
-		if countPlayers() < Config.MinPlayersToStart then
+		if countPlayers() < requiredRealPlayers() then
 			return false
 		end
 		setState("Countdown", { StartsIn = count })
 		task.wait(1)
 	end
-	if countPlayers() < Config.MinPlayersToStart then
+	if countPlayers() < requiredRealPlayers() then
 		return false
 	end
 	setState("Countdown", { StartsIn = 0 }) -- GO!
@@ -221,6 +275,35 @@ local function playRound(roundNumber)
 end
 
 local function playMatch()
+	-- 1) Pick the roster: ELO queue when >MaxPlayers humans are waiting,
+	--    otherwise everyone plays. Then fill empty slots with bots.
+	local humans = MatchmakingService.SelectParticipants(Players:GetPlayers(), true)
+	if not humans or #humans == 0 then
+		humans = Players:GetPlayers()
+	end
+	if #humans == 0 then
+		return -- everyone left between countdown and kickoff: back to lobby
+	end
+	local chosenSet = {}
+	for _, player in ipairs(humans) do
+		chosenSet[player] = true
+	end
+	-- Non-chosen humans (>MaxPlayers servers) spectate this match: they can
+	-- still move around but cannot touch the egg, be hit, or be scored.
+	BotRegistry.SetAllowedFilter(function(player)
+		return chosenSet[player] == true
+	end)
+
+	local botCount = 0
+	if Config.Bots.Enabled and Config.Bots.FillToMaxPlayers then
+		botCount = math.min(Config.Bots.MaxBots, Config.MaxPlayers - #humans)
+	end
+	BotService.SpawnBots(botCount)
+	print(("[Match] Match starting: %d human(s) + %d bot(s)"):format(#humans, botCount))
+	if matchStartHandler then
+		task.spawn(matchStartHandler, humans, botCount)
+	end
+
 	currentRound = 1
 	ScoringService.ResetMatch()
 	EggService.ResetHoldTimes()
@@ -233,6 +316,12 @@ local function playMatch()
 	-- Match over: MVP + final standings.
 	local final = ScoringService.GetFinalStandings()
 	MatchEnded:FireAllClients(final)
+
+	-- Meta layer: Clout + fragments + pity (EconomyService), then ELO.
+	if matchEndHandler then
+		task.spawn(matchEndHandler, final)
+	end
+	MatchmakingService.SettleMatch(final)
 
 	print("[Match] ================= MATCH OVER =================")
 	if #final.MVPNames > 0 then
@@ -256,6 +345,10 @@ local function playMatch()
 		NextLobbyIn = Config.IntermissionLength,
 	})
 	task.wait(Config.IntermissionLength)
+
+	-- Cleanup: bots leave, roster filter off (everyone is lobby-eligible).
+	BotService.DespawnAll()
+	BotRegistry.SetAllowedFilter(nil)
 end
 
 ---------------------------------------------------------------------------
@@ -290,9 +383,20 @@ function MatchService.GetRound()
 	return currentRound
 end
 
+-- Main injects the meta-layer hooks so MatchService never requires
+-- EconomyService directly (keeps the dependency graph one-directional).
+function MatchService.SetMatchStartHandler(fn)
+	matchStartHandler = (typeof(fn) == "function") and fn or nil
+end
+
+function MatchService.SetMatchEndHandler(fn)
+	matchEndHandler = (typeof(fn) == "function") and fn or nil
+end
+
 function MatchService.DebugState()
-	return ("state=%s round=%d/%d players=%d"):format(
-		currentState, currentRound, Config.RoundsPerMatch, countPlayers())
+	return ("state=%s round=%d/%d players=%d bots=%d private=%s"):format(
+		currentState, currentRound, Config.RoundsPerMatch, countPlayers(),
+		BotRegistry.CountBots(), tostring(isPrivateServer()))
 end
 
 return MatchService

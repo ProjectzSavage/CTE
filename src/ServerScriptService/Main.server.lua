@@ -3,30 +3,34 @@
 	===============================
 	Server bootstrap. Runs once when the server starts.
 
-	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service modules. As of Task 4, Egg, Combat, Scoring
-	     and Match are LIVE (full match loop: lobby -> countdown -> 3 rounds
-	     of 75s -> MVP + standings). Match initializes LAST because its state
-	     machine starts immediately and drives the other services. Only Data
-	     remains a reserved stub.
-	  3. Wires CombatService into EggService as the thrown-egg impact handler
-	     (dependency injection -- keeps the require graph one-directional).
-	  4. Creates the debug bridges (STUDIO ONLY, gated by
-	     Config.DebugAllowCommandBar):
+	  1. Creates ServerScriptService.ServerFeedback (BindableEvent) -- the
+	     server-side mirror of every FeedbackEvent (EconomyService counts
+	     knockdowns/steals through it). MUST exist before services init.
+	  2. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
+	  3. Initializes the service modules IN ORDER:
+	       Data -> Egg -> Combat -> Scoring -> Hatchery -> Economy
+	       -> Bots -> Matchmaking -> AntiCheat -> Match (last: its loop
+	          starts immediately and orchestrates everything).
+	  4. Cross-service wiring (dependency injection, one-directional graph):
+	       * EggService  -> CombatService.HandleEggImpact (thrown-egg hits)
+	       * MatchService-> EconomyService.ResetMatchStats / SettleMatch
+	       * HatcheryService <- DataService.OnProfileReady (snapshot push)
+	  5. Debug bridges (STUDIO ONLY, gated by Config.DebugAllowCommandBar):
 
-	     a) ReplicatedStorage.Remotes.DebugCommand (RemoteEvent) -- use this
-	        from the Studio command bar while PLAYING. The command bar runs in
-	        CLIENT context, which cannot see ServerScriptService children:
+	     a) ReplicatedStorage.Remotes.DebugCommand (RemoteEvent) -- from the
+	        Studio command bar while PLAYING (client context):
 
 	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")
-	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "PlayerName")
 	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")
 	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("grantegg")        -- mystery egg
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("grantegg", "rare")-- guaranteed rare
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("clout", "1000")   -- add clout
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("frags", "10")     -- add fragments
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("hatchnow")        -- finish hatch timers
 
-	     b) ServerScriptService.DebugCommands (BindableEvent) -- same commands
-	        from server-side code / "Run" mode:
-
-	          game.ServerScriptService.DebugCommands:Fire("fumble")
+	     b) ServerScriptService.DebugCommands (BindableEvent) -- same from
+	        server-side code / "Run" mode.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35,7 +39,16 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 
--- 1) Verify remotes (static instances declared in default.project.json)
+-- 1) Server-side feedback mirror (created BEFORE any service initializes).
+local debugCommands = Instance.new("BindableEvent")
+debugCommands.Name = "DebugCommands"
+debugCommands.Parent = ServerScriptService
+
+local serverFeedback = Instance.new("BindableEvent")
+serverFeedback.Name = "ServerFeedback"
+serverFeedback.Parent = ServerScriptService
+
+-- 2) Verify remotes (static instances declared in default.project.json)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
 local EXPECTED_REMOTES = {
@@ -54,6 +67,10 @@ local EXPECTED_REMOTES = {
 	"RoundEnded",
 	"MatchEnded",
 	"FeedbackEvent",
+	-- meta layer (economy / hatchery)
+	"MatchRewards",
+	"HatcheryRequest",
+	"HatcheryUpdated",
 	-- studio-only debug bridge (see below)
 	"DebugCommand",
 }
@@ -64,33 +81,46 @@ for _, name in EXPECTED_REMOTES do
 	end
 end
 
--- 2) Require + initialize services
-local MatchService = require(ServerScriptService:WaitForChild("MatchService"))
+-- 3) Require + initialize services
+local DataService = require(ServerScriptService:WaitForChild("DataService"))
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
 local CombatService = require(ServerScriptService:WaitForChild("CombatService"))
 local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
-local DataService = require(ServerScriptService:WaitForChild("DataService"))
+local HatcheryService = require(ServerScriptService:WaitForChild("HatcheryService"))
+local EconomyService = require(ServerScriptService:WaitForChild("EconomyService"))
+local BotService = require(ServerScriptService:WaitForChild("BotService"))
+local MatchmakingService = require(ServerScriptService:WaitForChild("MatchmakingService"))
+local AntiCheatService = require(ServerScriptService:WaitForChild("AntiCheatService"))
+local MatchService = require(ServerScriptService:WaitForChild("MatchService"))
 
--- Init order matters: MatchService last -- its loop starts immediately and
--- orchestrates EggService (round spawns/pickup gating) and ScoringService
--- (round bookkeeping), which must already be live.
-for _, service in ipairs({ EggService, CombatService, ScoringService, MatchService, DataService }) do
+-- Init order matters: Data first (profiles feed everything meta), Match LAST
+-- (its state machine starts immediately and drives the other services).
+for _, service in ipairs({
+	DataService, EggService, CombatService, ScoringService,
+	HatcheryService, EconomyService, BotService, MatchmakingService,
+	AntiCheatService, MatchService,
+}) do
 	if type(service.Init) == "function" then
 		service.Init()
 	end
 end
 
--- 3) Cross-service wiring: EggService reports thrown-egg impacts,
---    CombatService applies the knockback. Injected here so neither module
---    has to require the other in both directions.
+-- 4) Cross-service wiring (dependency injection keeps requires acyclic).
 EggService.SetImpactHandler(function(player, eggVelocity)
 	CombatService.HandleEggImpact(player, eggVelocity)
 end)
+MatchService.SetMatchStartHandler(function()
+	EconomyService.ResetMatchStats()
+end)
+MatchService.SetMatchEndHandler(function(final)
+	EconomyService.SettleMatch(final)
+end)
 
--- 4) Debug bridges (Studio only)
-local function runDebugCommand(command, argument)
+-- 5) Debug bridges (Studio only)
+local function runDebugCommand(command, argument, player)
 	if typeof(command) ~= "string" then
-		warn('[Debug] usage: "fumble" | "respawn_egg" | "state" [, playerName]')
+		warn('[Debug] usage: "fumble" | "respawn_egg" | "state" | "grantegg" '
+			.. '| "clout" | "frags" | "hatchnow" [, argument]')
 		return
 	end
 	command = command:lower()
@@ -103,8 +133,38 @@ local function runDebugCommand(command, argument)
 		print("[Debug] egg   : " .. EggService.DebugState())
 		print("[Debug] combat: " .. CombatService.DebugState())
 		print("[Debug] score : " .. ScoringService.DebugState())
+		print("[Debug] bots  : " .. BotService.DebugState())
+		print("[Debug] data  : " .. DataService.DebugState())
+		print("[Debug] econ  : " .. EconomyService.DebugState())
+		print("[Debug] hatch : " .. HatcheryService.DebugState())
+		print("[Debug] queue : " .. MatchmakingService.DebugState())
+		print("[Debug] cheat : " .. AntiCheatService.DebugState())
+	elseif command == "grantegg" then
+		if player then
+			HatcheryService.GrantEgg(player, "Debug", argument == "rare")
+		end
+	elseif command == "clout" then
+		if player then
+			DataService.AddClout(player, tonumber(argument) or 1000)
+			HatcheryService.SendSnapshot(player)
+		end
+	elseif command == "frags" then
+		if player then
+			DataService.AddFragments(player, tonumber(argument) or 10)
+			HatcheryService.SendSnapshot(player)
+		end
+	elseif command == "hatchnow" then
+		if player then
+			local profile = DataService.GetProfile(player)
+			if profile then
+				for _, egg in ipairs(profile.Eggs) do
+					egg.UnlocksAt = os.time()
+				end
+				HatcheryService.SendSnapshot(player)
+			end
+		end
 	else
-		warn('[Debug] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
+		warn('[Debug] unknown command "' .. command .. '"')
 	end
 end
 
@@ -116,19 +176,16 @@ if debugRemote and debugRemote:IsA("RemoteEvent") then
 		if not (RunService:IsStudio() and Config.DebugAllowCommandBar) then
 			return -- never trust debug commands outside Studio
 		end
-		runDebugCommand(command, argument)
+		runDebugCommand(command, argument, player)
 	end)
 else
 	warn("[Main] Remotes.DebugCommand missing -- command-bar debugging unavailable")
 end
 
 -- b) BindableEvent path -- for server-side automation and "Run" mode.
-local debugCommands = Instance.new("BindableEvent")
-debugCommands.Name = "DebugCommands"
-debugCommands.Parent = ServerScriptService
-
 debugCommands.Event:Connect(function(command, argument)
-	runDebugCommand(command, argument)
+	runDebugCommand(command, argument, nil)
 end)
 
-print("[Clutch the Egg] Server bootstrap complete -- egg + combat + scoring + match loop live (Task 4)")
+print("[Clutch the Egg] Server bootstrap complete -- match + bots + economy + "
+	.. "hatchery + matchmaking + anti-cheat live (Tasks 6-7)")

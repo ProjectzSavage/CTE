@@ -165,7 +165,8 @@ EXPECTED_REMOTES = [
     "RequestAttack", "RequestThrow", "RequestDash", "RequestBlockStart", "RequestBlockEnd",
     "RequestSprintStart", "RequestSprintEnd",
     "EggPossessionChanged", "HoldTimeUpdated", "MatchStateChanged", "RoundEnded",
-    "MatchEnded", "FeedbackEvent", "DebugCommand",
+    "MatchEnded", "FeedbackEvent", "MatchRewards", "HatcheryRequest", "HatcheryUpdated",
+    "DebugCommand",
 ]
 
 
@@ -230,7 +231,9 @@ def validate(root: ET.Element) -> list[str]:
         }
         if names.get("Main") != "Script":
             problems.append("ServerScriptService/Main must be a Script")
-        for service in ("MatchService", "EggService", "CombatService", "ScoringService", "DataService"):
+        for service in ("MatchService", "EggService", "CombatService", "ScoringService",
+                        "DataService", "EconomyService", "HatcheryService", "BotService",
+                        "BotRegistry", "MatchmakingService", "AntiCheatService"):
             if names.get(service) != "ModuleScript":
                 problems.append(f"ServerScriptService/{service} must be a ModuleScript")
 
@@ -254,7 +257,8 @@ def validate(root: ET.Element) -> list[str]:
         }
         if gui_names.get("GuiMain") != "LocalScript":
             problems.append("CTEGui/GuiMain must be a LocalScript")
-        for module in ("UiKit", "LobbyScreen", "HudScreen", "ResultsScreens", "SettingsPanel"):
+        for module in ("UiKit", "ControlsPanel", "HudScreen", "ResultsScreens",
+                       "SettingsPanel", "HatcheryPanel"):
             if gui_names.get(module) != "ModuleScript":
                 problems.append(f"CTEGui/{module} must be a ModuleScript")
 

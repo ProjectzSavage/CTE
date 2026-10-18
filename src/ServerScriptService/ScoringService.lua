@@ -35,6 +35,9 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 -- One-directional dependency: Scoring reads possession from EggService.
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
+-- Participants = real Players + bot Models (bots can win rounds and MVP,
+-- they just earn no currency -- EconomyService pays Players only).
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
 
 local ScoringService = {}
 
@@ -147,16 +150,16 @@ function ScoringService.EndRound()
 		matchTimes[player] = (matchTimes[player] or 0) + time
 	end
 
-	-- Ranked entries for everyone still in the server.
+	-- Ranked entries for everyone in the match (players + bots).
 	local entries = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+	for _, entity in ipairs(BotRegistry.GetParticipants()) do
 		table.insert(entries, {
-			Player = player,
-			Name = player.Name,
-			UserId = player.UserId,
-			RoundTime = roundTimes[player] or 0,
-			MatchTime = matchTimes[player] or 0,
-			RoundsWon = roundsWon[player] or 0,
+			Player = entity,
+			Name = entity.Name,
+			UserId = BotRegistry.GetUserId(entity),
+			RoundTime = roundTimes[entity] or 0,
+			MatchTime = matchTimes[entity] or 0,
+			RoundsWon = roundsWon[entity] or 0,
 		})
 	end
 	table.sort(entries, function(a, b)
@@ -201,13 +204,13 @@ end
 ]]
 function ScoringService.GetFinalStandings()
 	local standings = {}
-	for _, player in ipairs(Players:GetPlayers()) do
+	for _, entity in ipairs(BotRegistry.GetParticipants()) do
 		table.insert(standings, {
-			Player = player,
-			Name = player.Name,
-			UserId = player.UserId,
-			TotalHoldTime = matchTimes[player] or 0,
-			RoundsWon = roundsWon[player] or 0,
+			Player = entity,
+			Name = entity.Name,
+			UserId = BotRegistry.GetUserId(entity),
+			TotalHoldTime = matchTimes[entity] or 0,
+			RoundsWon = roundsWon[entity] or 0,
 			Left = false,
 		})
 	end

@@ -61,6 +61,9 @@ local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("C
 -- One-directional dependency: CombatService may use EggService, never the
 -- reverse (EggService calls back through the injected impact handler).
 local EggService = require(ServerScriptService:WaitForChild("EggService"))
+local BotRegistry = require(ServerScriptService:WaitForChild("BotRegistry"))
+local AntiCheatService = require(ServerScriptService:WaitForChild("AntiCheatService"))
+local HatcheryService = require(ServerScriptService:WaitForChild("HatcheryService"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
@@ -120,8 +123,9 @@ end
 -- Small helpers
 ---------------------------------------------------------------------------
 
-local function getAliveCharacter(player)
-	local character = player.Character
+local function getAliveCharacter(entity)
+	-- Entity-aware: Players use their Character; bot Models ARE the character.
+	local character = BotRegistry.GetCharacter(entity)
 	if not character then
 		return nil
 	end
@@ -132,12 +136,21 @@ local function getAliveCharacter(player)
 	return character
 end
 
-local function getRoot(player)
-	local character = player.Character
+local function getRoot(entity)
+	local character = BotRegistry.GetCharacter(entity)
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
+-- Server-side mirror of every feedback event (EconomyService listens).
+local serverFeedback = nil
+
 local function broadcastFeedback(kind, data)
+	if serverFeedback == nil then
+		serverFeedback = ServerScriptService:FindFirstChild("ServerFeedback") or false
+	end
+	if serverFeedback then
+		serverFeedback:Fire(kind, data or {})
+	end
 	FeedbackEvent:FireAllClients(kind, data or {})
 end
 
@@ -261,10 +274,62 @@ function CombatService.ApplyKnockback(player, direction, force, upwardForce, stu
 end
 
 ---------------------------------------------------------------------------
+-- Steal attempt (shared by player punches AND bot punches)
+---------------------------------------------------------------------------
+
+--[[
+	CombatService.AttemptSteal(attacker, victim, pushDir)
+	  attacker/victim : Player or bot Model (victim must be the carrier)
+	  pushDir         : horizontal push direction for the knock-loose pop
+
+	Pets get their moment here: the victim's EQUIPPED pet grants a tiny
+	capped grip chance (Config.Pets.GripByRarity, max MaxGripBonus %) to
+	HOLD ON through the punch. Save = "GripSave" feedback (big flex), no
+	fumble. Otherwise the egg pops loose and "EggStolen" fires.
+	Returns true when the egg came loose.
+]]
+function CombatService.AttemptSteal(attacker, victim, pushDir)
+	if EggService.GetCarrier() ~= victim then
+		return false
+	end
+
+	local grip = HatcheryService.GetGripBonus(victim)
+	if grip > 0 and math.random() * 100 < grip then
+		broadcastFeedback("GripSave", { Player = victim, Attacker = attacker })
+		if victim:IsA("Player") then
+			rejectClient(victim, "GripSave", { Ability = "Grip", ByPet = true })
+		end
+		if Config.DebugVerboseLogging then
+			print(("[CombatService] %s's pet GRIPPED the egg (%.1f%% save)"):format(
+				victim.Name, grip))
+		end
+		return false
+	end
+
+	local pop = Vector3.new(
+		pushDir.X * Config.EggKnockLooseSpeed,
+		Config.EggKnockLooseUpward,
+		pushDir.Z * Config.EggKnockLooseSpeed
+	)
+	EggService.Fumble(victim, "Attacked", pop)
+
+	local victimRoot = getRoot(victim)
+	broadcastFeedback("EggStolen", {
+		Attacker = attacker,
+		Victim = victim,
+		Position = victimRoot and victimRoot.Position or nil,
+	})
+	return true
+end
+
+---------------------------------------------------------------------------
 -- Attack
 ---------------------------------------------------------------------------
 
 local function handleAttack(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return -- remote spam: dropped + strike (see AntiCheatService)
+	end
 	local character = getAliveCharacter(player)
 	if not character then
 		return
@@ -308,14 +373,17 @@ local function handleAttack(player)
 	end
 
 	local hits = 0
-	for _, victim in ipairs(Players:GetPlayers()) do
+	for _, victim in ipairs(BotRegistry.GetParticipants()) do
 		if victim ~= player then
 			local victimRoot = getRoot(victim)
 			local victimCharacter = getAliveCharacter(victim)
 			if victimRoot and victimCharacter then
 				local offset = victimRoot.Position - root.Position
 				local distance = offset.Magnitude
-				-- +1 stud accounts for the victim's body radius.
+				-- +1 stud accounts for the victim's body radius. NOTE: this
+				-- distance is computed from SERVER positions only -- the
+				-- client never sends coordinates, so impossible attack
+				-- ranges simply whiff (anti-cheat by construction).
 				if distance <= Config.AttackRange + 1 then
 					local pushDir = Vector3.new(offset.X, 0, offset.Z)
 					if pushDir.Magnitude < 0.001 then
@@ -330,13 +398,26 @@ local function handleAttack(player)
 						hits = hits + 1
 
 						local victimWasCarrier = (EggService.GetCarrier() == victim)
-						local victimIFramed = (nowv < getStatus(victim).iFramesUntil)
+						local victimIsPlayer = victim:IsA("Player")
+						local victimIFramed = victimIsPlayer
+							and (nowv < getStatus(victim).iFramesUntil) or false
 
-						local result = CombatService.ApplyKnockback(
-							victim, pushDir,
-							Config.AttackKnockback, Config.AttackUpwardKnockback,
-							Config.AttackHitstun
-						)
+						local result
+						if victimIsPlayer then
+							result = CombatService.ApplyKnockback(
+								victim, pushDir,
+								Config.AttackKnockback, Config.AttackUpwardKnockback,
+								Config.AttackHitstun
+							)
+						else
+							-- Bot victim: registry knockback + stagger (bots
+							-- cannot block or i-frame).
+							result = BotRegistry.KnockbackBot(
+								victim, pushDir,
+								Config.AttackKnockback, Config.AttackUpwardKnockback,
+								Config.Bots.StunTime
+							)
+						end
 
 						broadcastFeedback("PunchHit", {
 							Attacker = player,
@@ -359,22 +440,10 @@ local function handleAttack(player)
 						end
 
 						-- Steal: punching the carrier knocks the egg loose
-						-- (i-framed carriers keep it -- the punch fully whiffed).
+						-- (i-framed carriers keep it; pets get a tiny capped
+						-- grip chance inside AttemptSteal).
 						if victimWasCarrier and not victimIFramed then
-							EggService.Fumble(
-								victim,
-								"Attacked",
-								Vector3.new(
-									pushDir.X * Config.EggKnockLooseSpeed,
-									Config.EggKnockLooseUpward,
-									pushDir.Z * Config.EggKnockLooseSpeed
-								)
-							)
-							broadcastFeedback("EggStolen", {
-								Attacker = player,
-								Victim = victim,
-								Position = victimRoot.Position,
-							})
+							CombatService.AttemptSteal(player, victim, pushDir)
 						end
 					end
 				end
@@ -396,6 +465,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleThrow(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	local character = getAliveCharacter(player)
 	if not character then
 		return
@@ -428,6 +500,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleDash(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	local character = getAliveCharacter(player)
 	if not character then
 		return
@@ -471,13 +546,13 @@ local function handleDash(player)
 end
 
 -- Carrier dash collision check (runs in the ticker while dashing): bumping
--- into another player fumbles the egg and nudges the victim.
+-- into another participant fumbles the egg and nudges the victim.
 local function checkDashCollision(player, status)
 	local root = getRoot(player)
 	if not root then
 		return
 	end
-	for _, other in ipairs(Players:GetPlayers()) do
+	for _, other in ipairs(BotRegistry.GetParticipants()) do
 		if other ~= player then
 			local otherRoot = getRoot(other)
 			if otherRoot and getAliveCharacter(other) then
@@ -496,11 +571,19 @@ local function checkDashCollision(player, status)
 						Victim = other,
 						Position = root.Position,
 					})
-					CombatService.ApplyKnockback(
-						other, pushDir,
-						Config.DashCollisionKnockback, Config.DashCollisionUpward,
-						nil
-					)
+					if other:IsA("Player") then
+						CombatService.ApplyKnockback(
+							other, pushDir,
+							Config.DashCollisionKnockback, Config.DashCollisionUpward,
+							nil
+						)
+					else
+						BotRegistry.KnockbackBot(
+							other, pushDir,
+							Config.DashCollisionKnockback, Config.DashCollisionUpward,
+							Config.Bots.StunTime
+						)
+					end
 					return
 				end
 			end
@@ -513,6 +596,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleBlockStart(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	if not getAliveCharacter(player) then
 		return
 	end
@@ -542,6 +628,9 @@ end
 ---------------------------------------------------------------------------
 
 local function handleSprintStart(player)
+	if not AntiCheatService.AllowAbilityRequest(player) then
+		return
+	end
 	if not getAliveCharacter(player) then
 		return
 	end
@@ -549,6 +638,9 @@ local function handleSprintStart(player)
 	-- hysteresis lives there so SprintStart/SprintEnd feedback is truthful).
 	getStatus(player).sprinting = true
 end
+
+-- NOTE: BlockEnd / SprintEnd are deliberately NOT rate-limited -- dropping a
+-- release request could lock a player in a blocking/sprinting state.
 
 local function handleSprintEnd(player)
 	getStatus(player).sprinting = false
@@ -563,11 +655,21 @@ function CombatService.HandleEggImpact(player, eggVelocity)
 	if direction.Magnitude < 0.001 then
 		direction = Vector3.new(0, 0, 1)
 	end
-	local result = CombatService.ApplyKnockback(
-		player, direction,
-		Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
-		Config.EggThrowImpactStun
-	)
+	local result
+	if player:IsA("Player") then
+		result = CombatService.ApplyKnockback(
+			player, direction,
+			Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
+			Config.EggThrowImpactStun
+		)
+	else
+		-- Bot got beaned by a thrown egg.
+		result = BotRegistry.KnockbackBot(
+			player, direction,
+			Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
+			Config.Bots.StunTime
+		)
+	end
 	if Config.DebugVerboseLogging then
 		print("[CombatService] Thrown egg hit " .. player.Name .. " (" .. result .. ")")
 	end
