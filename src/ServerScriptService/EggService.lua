@@ -88,6 +88,7 @@ local respawnAt = nil            -- os.clock() when STATE_RESPAWNING completes
 local thrower = nil              -- Player? who last threw the egg (self-pickup lockout)
 local thrownHotUntil = 0         -- os.clock() deadline for the thrown egg's impact window
 local impactHandler = nil        -- function(player, eggVelocity) injected by Main (CombatService)
+local pickupsEnabled = true      -- MatchService gates this: pickups only during RoundPlaying
 local broadcastNeeded = false    -- push one more HoldTimeUpdated after a change
 local lastTickTime = 0
 local initialized = false
@@ -257,6 +258,9 @@ end
 local function tryPickup(player)
 	-- All guards first: no yields inside this function, so two touches in the
 	-- same frame can never produce two carriers.
+	if not pickupsEnabled then
+		return false -- match is not in RoundPlaying
+	end
 	if state ~= STATE_LOOSE or not egg then
 		return false
 	end
@@ -572,11 +576,23 @@ function EggService.StartRound()
 	spawnAtCenter()
 end
 
--- Called by MatchService (later) at the end of every round.
+-- Called by MatchService (later) at the end of every round: fumble any
+-- carrier and park the egg at center for the results pause.
 function EggService.EndRound()
 	if carrier then
 		doFumble(carrier, "RoundEnd")
 	end
+	spawnAtCenter()
+end
+
+-- MatchService gate: pickups are only allowed while a round is playing.
+-- The egg stays visible at center between rounds but cannot be grabbed.
+function EggService.SetEnabled(enabled)
+	pickupsEnabled = (enabled == true)
+end
+
+function EggService.IsEnabled()
+	return pickupsEnabled
 end
 
 -- Current carrier (Player?) -- the hook ScoringService/GUI read.

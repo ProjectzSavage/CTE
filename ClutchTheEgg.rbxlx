@@ -245,7 +245,7 @@ local Config = {}
 -- Match flow
 --------------------------------------------------------------------------
 Config.MaxPlayers = 6            -- hard player cap for the arena
-Config.MinPlayersToStart = 1     -- TODO: raise once matchmaking exists (1 = solo testing)
+Config.MinPlayersToStart = 2     -- countdown starts at 2+ players (bots may fill in later)
 Config.RoundLength = 75          -- seconds per round
 Config.RoundsPerMatch = 3        -- best of 3
 Config.RoundsToWinMatch = 2      -- first to 2 round wins takes the match
@@ -289,6 +289,13 @@ Config.DashIFramesCarrying = 0
 Config.DashCollisionRadius = 4     -- studs between torsos that counts as a dash hit
 Config.DashCollisionKnockback = 12 -- horizontal push applied to the victim (studs/s)
 Config.DashCollisionUpward = 4
+
+--------------------------------------------------------------------------
+-- Sprint (hold to run faster -- the main stamina sink; default key Shift)
+--------------------------------------------------------------------------
+Config.SprintSpeedBonus = 6      -- added to base speed while sprinting (works while carrying too)
+Config.SprintStaminaDrain = 12   -- stamina drained per second while sprinting
+Config.SprintResumeStamina = 25  -- after exhaustion, sprinting re-enables at this stamina
 
 --------------------------------------------------------------------------
 -- Attack (punch -- enabled ONLY when NOT holding the egg; "HANDS FULL" otherwise)
@@ -364,10 +371,27 @@ Config.ArenaSpawnCount = 6
 Config.ArenaEggSpawnHeight = 3    -- Y of the Workspace.Arena.EggSpawnPoint marker
 
 --------------------------------------------------------------------------
+-- Animations (client-side polish, driven by FeedbackEvent kinds)
+--------------------------------------------------------------------------
+-- Upload animations via the Creator Dashboard and paste their
+-- "rbxassetid://..." URLs here. Empty string = disabled (skipped silently),
+-- so the game runs fine before any animation exists.
+Config.Animations = {
+	Dash = "",   -- one-shot, plays on "DashStart"
+	Attack = "", -- one-shot, plays on "PunchSwing"
+	Throw = "",  -- one-shot, plays on "EggThrown"
+	Block = "",  -- looped while blocking  ("BlockStart"/"BlockEnd")
+	Sprint = "", -- looped while sprinting ("SprintStart"/"SprintEnd")
+	Carry = "",  -- looped while holding the egg (HasEgg attribute)
+}
+
+--------------------------------------------------------------------------
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
 Config.DebugAllowCommandBar = true -- DebugCommand remote works in Studio only (never in production)
+Config.DebugQuickMatch = false    -- true: tiny rounds to test the full match flow quickly
+Config.DebugQuickMatchRoundLength = 15 -- round length (s) used when DebugQuickMatch is true
 
 return Config
 ]]></ProtectedString>
@@ -405,55 +429,65 @@ return Config
 </Item>
 <Item class="RemoteEvent" referent="RBX25">
 <Properties>
-	<string name="Name">EggPossessionChanged</string>
+	<string name="Name">RequestSprintStart</string>
 </Properties>
 </Item>
 <Item class="RemoteEvent" referent="RBX26">
 <Properties>
-	<string name="Name">HoldTimeUpdated</string>
+	<string name="Name">RequestSprintEnd</string>
 </Properties>
 </Item>
 <Item class="RemoteEvent" referent="RBX27">
 <Properties>
-	<string name="Name">MatchStateChanged</string>
+	<string name="Name">EggPossessionChanged</string>
 </Properties>
 </Item>
 <Item class="RemoteEvent" referent="RBX28">
 <Properties>
-	<string name="Name">RoundEnded</string>
+	<string name="Name">HoldTimeUpdated</string>
 </Properties>
 </Item>
 <Item class="RemoteEvent" referent="RBX29">
 <Properties>
-	<string name="Name">MatchEnded</string>
+	<string name="Name">MatchStateChanged</string>
 </Properties>
 </Item>
 <Item class="RemoteEvent" referent="RBX30">
 <Properties>
-	<string name="Name">FeedbackEvent</string>
+	<string name="Name">RoundEnded</string>
 </Properties>
 </Item>
 <Item class="RemoteEvent" referent="RBX31">
+<Properties>
+	<string name="Name">MatchEnded</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX32">
+<Properties>
+	<string name="Name">FeedbackEvent</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX33">
 <Properties>
 	<string name="Name">DebugCommand</string>
 </Properties>
 </Item>
 </Item>
 </Item>
-<Item class="ServerScriptService" referent="RBX32">
+<Item class="ServerScriptService" referent="RBX34">
 <Properties>
 	<string name="Name">ServerScriptService</string>
 </Properties>
-<Item class="ModuleScript" referent="RBX33">
+<Item class="ModuleScript" referent="RBX35">
 <Properties>
 	<string name="Name">CombatService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
 	CombatService (ServerScriptService.CombatService)
 	=================================================
-	Server-authoritative abilities: Attack, Throw, Block, Dash + the shared
-	stamina pool. Clients only fire Request* RemoteEvents; EVERY rule is
-	checked here (context, cooldown, stamina, alive/stun state). Cheaters get
-	rejected and nothing happens.
+	Server-authoritative abilities: Attack, Throw, Block, Dash, Sprint + the
+	shared stamina pool. Clients only fire Request* RemoteEvents; EVERY rule
+	is checked here (context, cooldown, stamina, alive/stun state). Cheaters
+	get rejected and nothing happens.
 
 	Ability rules (from the game spec)
 	----------------------------------
@@ -465,33 +499,41 @@ return Config
 	Throw  : ONLY when holding the egg. Launches it via EggService.ReleaseThrow
 	         at Config.ThrowSpeed with an upward lob. While "hot", the thrown
 	         egg knocks players back and bounces loose (HandleEggImpact).
-	Block  : ALWAYS usable. Incoming knockback reduced by
+	Block  : ALWAYS usable (hold). Incoming knockback reduced by
 	         Config.BlockKnockbackReduction, move speed multiplied by
 	         Config.BlockSpeedMultiplier, drains Config.BlockStaminaDrain/s.
 	         A blocking carrier STILL accrues hold time (EggService does not
 	         care about blocking). Block breaks automatically at 0 stamina.
-	Dash   : ALWAYS usable. Speed burst for Config.DashDuration. NOT carrying:
-	         brief i-frames (Config.DashIFrames). Carrying: shorter dash, NO
-	         i-frames, and colliding with a player fumbles the egg
-	         ("DashFumble" feedback + small knockback to the victim).
+	Dash   : ALWAYS usable (default key E). Speed burst for
+	         Config.DashDuration. NOT carrying: brief i-frames
+	         (Config.DashIFrames). Carrying: shorter dash, NO i-frames, and
+	         colliding with a player within Config.DashCollisionRadius
+	         fumbles the egg ("DashFumble" + small knockback to the victim).
+	Sprint : ALWAYS usable (hold, default key Shift) -- the main stamina
+	         sink. +Config.SprintSpeedBonus speed (works while carrying too),
+	         drains Config.SprintStaminaDrain/s. Blocking, stun and dash
+	         suppress sprinting; at 0 stamina the sprinter is "exhausted"
+	         until stamina recovers to Config.SprintResumeStamina.
 
 	Stamina: max Config.StaminaMax, regenerates Config.StaminaRegenPerSecond
 	         after Config.StaminaRegenDelay without spending. Dash and Attack
-	         cost stamina up front; Block drains while held. Published to
-	         clients as the "Stamina" Player attribute (rounded) for the future
-	         HUD.
+	         cost stamina up front; Block and Sprint drain while active.
+	         Published to clients as the rounded "Stamina" Player attribute
+	         (HUD-ready).
 
 	Speed ownership: this module is the ONLY writer of Humanoid.WalkSpeed.
-	         Base = carrier ? CarrySpeed : WalkSpeed, then block/stun/dash
-	         modifiers. Recalculated every tick (writes only on change) plus
-	         on HasEgg attribute changes.
+	         Base = carrier ? CarrySpeed : WalkSpeed, + SprintSpeedBonus while
+	         sprinting, x BlockSpeedMultiplier while blocking, 0 while
+	         stunned, dash override during bursts. Recalculated every tick
+	         (writes only on change) plus on HasEgg attribute changes.
 
 	FeedbackEvent kinds fired here
 	------------------------------
 	FireAllClients : PunchSwing, PunchHit, BlockedHit, IFrameDodge, EggStolen,
-	                 DashStart, DashFumble, BlockStart, BlockEnd, BlockBroken
+	                 DashStart, DashFumble, BlockStart, BlockEnd, BlockBroken,
+	                 SprintStart, SprintEnd
 	FireClient     : HandsFull, NotCarrying, NoStamina, OnCooldown, Stunned,
-	                 PunchWhiff
+	                 PunchWhiff, Exhausted
 ]]
 
 local Players = game:GetService("Players")
@@ -509,6 +551,8 @@ local RequestThrow = Remotes:WaitForChild("RequestThrow")
 local RequestDash = Remotes:WaitForChild("RequestDash")
 local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+local RequestSprintStart = Remotes:WaitForChild("RequestSprintStart")
+local RequestSprintEnd = Remotes:WaitForChild("RequestSprintEnd")
 local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
 
 local CombatService = {}
@@ -533,6 +577,9 @@ local function newStatus()
 		publishedStamina = -1, -- forces the first attribute publish
 		lastSpendTime = -math.huge,
 		blocking = false,
+		sprinting = false,       -- client is HOLDING the sprint input
+		sprintEffective = false, -- sprint is actually active (not suppressed)
+		sprintLocked = false,    -- exhausted: locked until SprintResumeStamina
 		attackReadyAt = 0,
 		dashReadyAt = 0,
 		dashUntil = 0,
@@ -591,6 +638,16 @@ local function spendStamina(status, amount)
 	return true
 end
 
+-- Sprint is suppressed by blocking, stun, dash and exhaustion.
+local function computeSprintEffective(status, nowv)
+	return status.sprinting
+		and not status.blocking
+		and not status.sprintLocked
+		and status.stamina > 0
+		and nowv >= status.stunUntil
+		and nowv >= status.dashUntil
+end
+
 -- The single authority for movement speed. Called every tick and on state
 -- flips; only writes when the value actually changes (no property churn).
 local function recalcSpeed(player)
@@ -614,6 +671,9 @@ local function recalcSpeed(player)
 	else
 		local isCarrier = (EggService.GetCarrier() == player)
 		speed = isCarrier and Config.CarrySpeed or Config.WalkSpeed
+		if computeSprintEffective(status, nowv) then
+			speed = speed + Config.SprintSpeedBonus
+		end
 		if status.blocking then
 			speed = speed * Config.BlockSpeedMultiplier
 		end
@@ -947,7 +1007,7 @@ local function handleBlockStart(player)
 	if not status.blocking then
 		status.blocking = true
 		broadcastFeedback("BlockStart", { Player = player })
-		recalcSpeed(player)
+		recalcSpeed(player) -- blocking also suppresses sprint (recalc handles it)
 	end
 end
 
@@ -958,6 +1018,23 @@ local function handleBlockEnd(player)
 		broadcastFeedback("BlockEnd", { Player = player })
 		recalcSpeed(player)
 	end
+end
+
+---------------------------------------------------------------------------
+-- Sprint (hold Shift: the main stamina drain)
+---------------------------------------------------------------------------
+
+local function handleSprintStart(player)
+	if not getAliveCharacter(player) then
+		return
+	end
+	-- No stamina gate here: the tick decides effectiveness (exhaustion
+	-- hysteresis lives there so SprintStart/SprintEnd feedback is truthful).
+	getStatus(player).sprinting = true
+end
+
+local function handleSprintEnd(player)
+	getStatus(player).sprinting = false
 end
 
 ---------------------------------------------------------------------------
@@ -989,7 +1066,13 @@ local function bindPlayer(player)
 	player.CharacterAdded:Connect(function()
 		-- Fresh life: clear transient states, refill stamina, re-apply speed.
 		local status = getStatus(player)
+		if status.sprintEffective then
+			broadcastFeedback("SprintEnd", { Player = player })
+		end
 		status.blocking = false
+		status.sprinting = false
+		status.sprintEffective = false
+		status.sprintLocked = false
 		status.dashUntil = 0
 		status.dashCollisionDone = false
 		status.iFramesUntil = 0
@@ -1010,7 +1093,7 @@ local function bindPlayer(player)
 end
 
 ---------------------------------------------------------------------------
--- Ticker (20 Hz): stamina, dash windows, collisions, speed, attribute publish
+-- Ticker (20 Hz): stamina, sprint/block drains, dash windows, collisions
 ---------------------------------------------------------------------------
 
 local function tickOnce()
@@ -1023,11 +1106,12 @@ local function tickOnce()
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		local status = getStatus(player)
+		local drained = false
 
-		-- Stamina: block drains; otherwise regen after a short delay.
+		-- Block drain (breaks the block at 0 stamina).
 		if status.blocking then
 			status.stamina = status.stamina - Config.BlockStaminaDrain * dt
-			status.lastSpendTime = nowv
+			drained = true
 			if status.stamina <= 0 then
 				status.stamina = 0
 				status.blocking = false
@@ -1036,6 +1120,31 @@ local function tickOnce()
 					print("[CombatService] " .. player.Name .. "'s block broke (out of stamina)")
 				end
 			end
+		end
+
+		-- Sprint: effectiveness (blocking/stun/dash/exhaustion suppress it),
+		-- drain while effective, exhaustion hysteresis, edge feedback.
+		local sprintEffective = computeSprintEffective(status, nowv)
+		if sprintEffective then
+			status.stamina = status.stamina - Config.SprintStaminaDrain * dt
+			drained = true
+			if status.stamina <= 0 then
+				status.stamina = 0
+				status.sprintLocked = true -- exhausted until SprintResumeStamina
+				sprintEffective = false
+				rejectClient(player, "Exhausted", { Ability = "Sprint" })
+			end
+		elseif status.sprintLocked and status.stamina >= Config.SprintResumeStamina then
+			status.sprintLocked = false
+		end
+		if sprintEffective ~= status.sprintEffective then
+			status.sprintEffective = sprintEffective
+			broadcastFeedback(sprintEffective and "SprintStart" or "SprintEnd", { Player = player })
+		end
+
+		-- Regen only when nothing drained this tick, after a short delay.
+		if drained then
+			status.lastSpendTime = nowv
 		elseif nowv - status.lastSpendTime >= Config.StaminaRegenDelay then
 			status.stamina = math.min(Config.StaminaMax,
 				status.stamina + Config.StaminaRegenPerSecond * dt)
@@ -1058,7 +1167,7 @@ local function tickOnce()
 			checkDashCollision(player, status)
 		end
 
-		-- Single speed authority (handles dash/stun expiry, block, carry).
+		-- Single speed authority (handles dash/stun expiry, block, sprint, carry).
 		recalcSpeed(player)
 	end
 end
@@ -1100,6 +1209,12 @@ function CombatService.Init()
 	RequestBlockEnd.OnServerEvent:Connect(function(player)
 		handleBlockEnd(player)
 	end)
+	RequestSprintStart.OnServerEvent:Connect(function(player)
+		handleSprintStart(player)
+	end)
+	RequestSprintEnd.OnServerEvent:Connect(function(player)
+		handleSprintEnd(player)
+	end)
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		bindPlayer(player)
@@ -1110,7 +1225,7 @@ function CombatService.Init()
 	end)
 
 	startTicker()
-	print("[CombatService] Initialized: attack/throw/block/dash + stamina live")
+	print("[CombatService] Initialized: attack/throw/block/dash/sprint + stamina live")
 end
 
 -- Read-only snapshots for other systems / the future GUI.
@@ -1120,6 +1235,10 @@ end
 
 function CombatService.IsBlocking(player)
 	return getStatus(player).blocking
+end
+
+function CombatService.IsSprinting(player)
+	return getStatus(player).sprintEffective
 end
 
 function CombatService.IsDashing(player)
@@ -1141,6 +1260,7 @@ function CombatService.DebugState()
 		if player.Parent then
 			local flags = {}
 			if status.blocking then table.insert(flags, "blocking") end
+			if status.sprintEffective then table.insert(flags, "sprinting") end
 			if now() < status.dashUntil then table.insert(flags, "dashing") end
 			if now() < status.iFramesUntil then table.insert(flags, "iframes") end
 			if now() < status.stunUntil then table.insert(flags, "stunned") end
@@ -1156,7 +1276,7 @@ return CombatService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX34">
+<Item class="ModuleScript" referent="RBX36">
 <Properties>
 	<string name="Name">DataService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1184,7 +1304,7 @@ return DataService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX35">
+<Item class="ModuleScript" referent="RBX37">
 <Properties>
 	<string name="Name">EggService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1277,6 +1397,7 @@ local respawnAt = nil            -- os.clock() when STATE_RESPAWNING completes
 local thrower = nil              -- Player? who last threw the egg (self-pickup lockout)
 local thrownHotUntil = 0         -- os.clock() deadline for the thrown egg's impact window
 local impactHandler = nil        -- function(player, eggVelocity) injected by Main (CombatService)
+local pickupsEnabled = true      -- MatchService gates this: pickups only during RoundPlaying
 local broadcastNeeded = false    -- push one more HoldTimeUpdated after a change
 local lastTickTime = 0
 local initialized = false
@@ -1446,6 +1567,9 @@ end
 local function tryPickup(player)
 	-- All guards first: no yields inside this function, so two touches in the
 	-- same frame can never produce two carriers.
+	if not pickupsEnabled then
+		return false -- match is not in RoundPlaying
+	end
 	if state ~= STATE_LOOSE or not egg then
 		return false
 	end
@@ -1761,11 +1885,23 @@ function EggService.StartRound()
 	spawnAtCenter()
 end
 
--- Called by MatchService (later) at the end of every round.
+-- Called by MatchService (later) at the end of every round: fumble any
+-- carrier and park the egg at center for the results pause.
 function EggService.EndRound()
 	if carrier then
 		doFumble(carrier, "RoundEnd")
 	end
+	spawnAtCenter()
+end
+
+-- MatchService gate: pickups are only allowed while a round is playing.
+-- The egg stays visible at center between rounds but cannot be grabbed.
+function EggService.SetEnabled(enabled)
+	pickupsEnabled = (enabled == true)
+end
+
+function EggService.IsEnabled()
+	return pickupsEnabled
 end
 
 -- Current carrier (Player?) -- the hook ScoringService/GUI read.
@@ -1953,7 +2089,7 @@ return EggService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="Script" referent="RBX36">
+<Item class="Script" referent="RBX38">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">Main</string>
@@ -1963,10 +2099,11 @@ return EggService
 	Server bootstrap. Runs once when the server starts.
 
 	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service modules. As of Task 3, EggService AND
-	     CombatService are LIVE (pickup/carry/hold time/fumble/respawn +
-	     attack/throw/block/dash/stamina). Match, Scoring and Data remain
-	     documented stubs.
+	  2. Initializes the service modules. As of Task 4, Egg, Combat, Scoring
+	     and Match are LIVE (full match loop: lobby -> countdown -> 3 rounds
+	     of 75s -> MVP + standings). Match initializes LAST because its state
+	     machine starts immediately and drives the other services. Only Data
+	     remains a reserved stub.
 	  3. Wires CombatService into EggService as the thrown-egg impact handler
 	     (dependency injection -- keeps the require graph one-directional).
 	  4. Creates the debug bridges (STUDIO ONLY, gated by
@@ -2003,6 +2140,8 @@ local EXPECTED_REMOTES = {
 	"RequestDash",
 	"RequestBlockStart",
 	"RequestBlockEnd",
+	"RequestSprintStart",
+	"RequestSprintEnd",
 	-- server -> client (replicated state + polish hooks)
 	"EggPossessionChanged",
 	"HoldTimeUpdated",
@@ -2027,7 +2166,10 @@ local CombatService = require(ServerScriptService:WaitForChild("CombatService"))
 local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
 local DataService = require(ServerScriptService:WaitForChild("DataService"))
 
-for _, service in ipairs({ MatchService, EggService, CombatService, ScoringService, DataService }) do
+-- Init order matters: MatchService last -- its loop starts immediately and
+-- orchestrates EggService (round spawns/pickup gating) and ScoringService
+-- (round bookkeeping), which must already be live.
+for _, service in ipairs({ EggService, CombatService, ScoringService, MatchService, DataService }) do
 	if type(service.Init) == "function" then
 		service.Init()
 	end
@@ -2052,8 +2194,10 @@ local function runDebugCommand(command, argument)
 	elseif command == "respawn_egg" then
 		EggService.RespawnEggNow()
 	elseif command == "state" then
+		print("[Debug] match : " .. MatchService.DebugState())
 		print("[Debug] egg   : " .. EggService.DebugState())
 		print("[Debug] combat: " .. CombatService.DebugState())
+		print("[Debug] score : " .. ScoringService.DebugState())
 	else
 		warn('[Debug] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
 	end
@@ -2082,81 +2226,578 @@ debugCommands.Event:Connect(function(command, argument)
 	runDebugCommand(command, argument)
 end)
 
-print("[Clutch the Egg] Server bootstrap complete -- egg + combat live (Task 3); match/scoring are stubs")
+print("[Clutch the Egg] Server bootstrap complete -- egg + combat + scoring + match loop live (Task 4)")
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX37">
+<Item class="ModuleScript" referent="RBX39">
 <Properties>
 	<string name="Name">MatchService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
 	MatchService (ServerScriptService.MatchService)
 	===============================================
-	STATUS: stub -- gameplay not implemented yet.
+	The match state machine:
 
-	Future responsibilities
-	-----------------------
-	* Own the match state machine:
-	    Lobby -> Countdown -> Round (Config.RoundLength seconds)
-	          -> RoundEnd -> (next round | MatchEnd) -> Lobby
-	* Best of Config.RoundsPerMatch rounds; first to Config.RoundsToWinMatch
-	  round wins takes the match.
-	* Broadcast MatchStateChanged / RoundEnded / MatchEnded to all clients.
-	* Coordinate the other services: call EggService.StartRound() /
-	  EggService.EndRound() (and EggService.ResetHoldTimes() on a new match),
-	  freeze combat at round end, ask ScoringService for the round winner
-	  (most total hold time) and the match MVP (most hold time across rounds).
+	  Lobby -> Countdown -> RoundPlaying -> RoundEnd -+-> (next round)
+	                                                  +-> MatchEnd -> Lobby
+
+	Lobby        : waits until at least Config.MinPlayersToStart (2) are in
+	               (up to Config.MaxPlayers = 6; slot capping is Roblox's job).
+	               Egg pickups are disabled; the egg sits at center.
+	Countdown    : Config.RoundStartCountdown seconds, re-checked every tick --
+	               if players drop below the minimum it aborts back to Lobby.
+	RoundPlaying : Config.RoundLength seconds (75). EggService spawns a fresh
+	               egg at center, pickups enabled; ScoringService accumulates
+	               hold time for whoever carries (pauses while the egg is
+	               loose/respawning -- there is no carrier then). A 1 Hz
+	               MatchStateChanged clock keeps GUIs in sync.
+	RoundEnd     : scoring settles FIRST (a carrier at the exact expiry keeps
+	               their partial-second time), then the egg is fumbled and
+	               parked at center. RoundEnded fires with ranked results and
+	               the round winner is printed to output. Round hold times are
+	               cleared; MATCH totals persist.
+	MatchEnd     : after Config.RoundsPerMatch (3) rounds -- MVP = highest
+	               total hold time across all rounds (present players only,
+	               ties shared). MatchEnded fires with final standings
+	               (total hold time + rounds won per player) and everything
+	               is printed to output. After Config.IntermissionLength it
+	               resets and returns to Lobby.
+
+	Leavers      : a player leaving mid-round fumbles (EggService) and their
+	               match totals become "ghost" standings (ScoringService);
+	               the round/match simply continues with whoever is left.
+
+	Remote payloads
+	---------------
+	MatchStateChanged(stateName, data)
+	  Lobby        : { Players, MinPlayersToStart, MaxPlayers }
+	  Countdown    : { StartsIn }                  (StartsIn = 0 means GO)
+	  RoundPlaying : { Round, RoundsPerMatch, RoundLength?, TimeLeft }  (~1 Hz)
+	  RoundEnd     : { Round, WinnerName?, NextRoundIn }
+	  MatchEnd     : { MVPNames, BestTotalHoldTime, NextLobbyIn }
+	RoundEnded(roundNumber, results)   -- results = ScoringService.EndRound()
+	MatchEnded(finalStandings)         -- ScoringService.GetFinalStandings()
+
+	Testing: set Config.DebugQuickMatch = true for 15-second rounds.
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local EggService = require(ServerScriptService:WaitForChild("EggService"))
+local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
+local RoundEnded = Remotes:WaitForChild("RoundEnded")
+local MatchEnded = Remotes:WaitForChild("MatchEnded")
 
 local MatchService = {}
 
-function MatchService.Init()
-	-- TODO(match): build the state machine described above.
-	if Config.DebugVerboseLogging then
-		print("[MatchService] stub initialized")
+local currentState = "Boot"
+local currentRound = 0
+local loopStarted = false
+
+local function now()
+	return os.clock()
+end
+
+local function countPlayers()
+	return #Players:GetPlayers()
+end
+
+local function getRoundLength()
+	if Config.DebugQuickMatch then
+		return Config.DebugQuickMatchRoundLength
 	end
+	return Config.RoundLength
+end
+
+local function setState(stateName, data)
+	currentState = stateName
+	MatchStateChanged:FireAllClients(stateName, data or {})
+	if Config.DebugVerboseLogging then
+		print("[Match] State -> " .. stateName)
+	end
+end
+
+---------------------------------------------------------------------------
+-- States
+---------------------------------------------------------------------------
+
+local function waitForPlayers()
+	EggService.SetEnabled(false) -- no pickups in the lobby
+	local lastCount = -1
+	while true do
+		local count = countPlayers()
+		if count ~= lastCount then
+			lastCount = count
+			setState("Lobby", {
+				Players = count,
+				MinPlayersToStart = Config.MinPlayersToStart,
+				MaxPlayers = Config.MaxPlayers,
+			})
+		end
+		if count >= Config.MinPlayersToStart then
+			return
+		end
+		task.wait(0.5)
+	end
+end
+
+-- Returns true when the countdown completed with enough players.
+local function runCountdown()
+	for count = Config.RoundStartCountdown, 1, -1 do
+		if countPlayers() < Config.MinPlayersToStart then
+			return false
+		end
+		setState("Countdown", { StartsIn = count })
+		task.wait(1)
+	end
+	if countPlayers() < Config.MinPlayersToStart then
+		return false
+	end
+	setState("Countdown", { StartsIn = 0 }) -- GO!
+	return true
+end
+
+local function playRound(roundNumber)
+	local length = getRoundLength()
+
+	-- Fresh round: reset per-round scoring, egg to center, pickups live.
+	ScoringService.StartRound()
+	EggService.StartRound()
+	EggService.SetEnabled(true)
+
+	setState("RoundPlaying", {
+		Round = roundNumber,
+		RoundsPerMatch = Config.RoundsPerMatch,
+		RoundLength = length,
+		TimeLeft = length,
+	})
+	print(("[Match] --- Round %d/%d started (%ds) ---"):format(
+		roundNumber, Config.RoundsPerMatch, length))
+
+	-- Round clock with a 1 Hz broadcast for GUI timers. This fires the remote
+	-- directly (not setState) so the verbose log only shows real transitions.
+	local deadline = now() + length
+	local lastAnnounced = length
+	while true do
+		local remaining = deadline - now()
+		if remaining <= 0 then
+			break
+		end
+		local timeLeft = math.ceil(remaining)
+		if timeLeft ~= lastAnnounced then
+			lastAnnounced = timeLeft
+			MatchStateChanged:FireAllClients("RoundPlaying", {
+				Round = roundNumber,
+				RoundsPerMatch = Config.RoundsPerMatch,
+				TimeLeft = timeLeft,
+			})
+		end
+		task.wait(0.2)
+	end
+
+	-- Time! Score FIRST so whoever is carrying at the exact expiry keeps
+	-- their partial-second hold time, then park the egg and lock pickups.
+	EggService.SetEnabled(false)
+	local results = ScoringService.EndRound()
+	EggService.EndRound()
+
+	RoundEnded:FireAllClients(roundNumber, results)
+
+	-- Announce the round to the output (deliverable: results in output).
+	if results.WinnerName then
+		print(("[Match] Round %d winner: %s (%.1fs hold)%s"):format(
+			roundNumber, results.WinnerName, results.TopTime,
+			results.Tied and "  [TIED]" or ""))
+	else
+		print(("[Match] Round %d: nobody held the egg - no winner"):format(roundNumber))
+	end
+	for rank, entry in ipairs(results.Entries) do
+		print(("    #%d  %-20s round %6.2fs | match %6.2fs | rounds won %d"):format(
+			rank, entry.Name, entry.RoundTime, entry.MatchTime, entry.RoundsWon))
+	end
+
+	setState("RoundEnd", {
+		Round = roundNumber,
+		WinnerName = results.WinnerName,
+		NextRoundIn = Config.RoundEndFreeze,
+	})
+	task.wait(Config.RoundEndFreeze)
+end
+
+local function playMatch()
+	currentRound = 1
+	ScoringService.ResetMatch()
+	EggService.ResetHoldTimes()
+
+	while currentRound <= Config.RoundsPerMatch do
+		playRound(currentRound)
+		currentRound = currentRound + 1
+	end
+
+	-- Match over: MVP + final standings.
+	local final = ScoringService.GetFinalStandings()
+	MatchEnded:FireAllClients(final)
+
+	print("[Match] ================= MATCH OVER =================")
+	if #final.MVPNames > 0 then
+		print(("[Match] MVP: %s (%.1fs total hold time)"):format(
+			table.concat(final.MVPNames, " + "), final.BestTotalHoldTime))
+	else
+		print("[Match] MVP: nobody (no hold time was recorded)")
+	end
+	print("[Match] Final standings:")
+	for rank, entry in ipairs(final.Standings) do
+		print(("    #%d  %-20s total %7.2fs | rounds won %d%s%s"):format(
+			rank, entry.Name, entry.TotalHoldTime, entry.RoundsWon,
+			entry.IsMVP and " | MVP" or "",
+			entry.Left and " | left match" or ""))
+	end
+	print("[Match] =============================================")
+
+	setState("MatchEnd", {
+		MVPNames = final.MVPNames,
+		BestTotalHoldTime = final.BestTotalHoldTime,
+		NextLobbyIn = Config.IntermissionLength,
+	})
+	task.wait(Config.IntermissionLength)
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+function MatchService.Init()
+	if loopStarted then
+		return
+	end
+	loopStarted = true
+
+	task.spawn(function()
+		while true do
+			waitForPlayers()
+			if runCountdown() then
+				playMatch()
+			end
+		end
+	end)
+
+	print("[MatchService] Initialized: Lobby -> Countdown -> Rounds -> MatchEnd loop running")
+end
+
+function MatchService.GetState()
+	return currentState
+end
+
+function MatchService.GetRound()
+	return currentRound
+end
+
+function MatchService.DebugState()
+	return ("state=%s round=%d/%d players=%d"):format(
+		currentState, currentRound, Config.RoundsPerMatch, countPlayers())
 end
 
 return MatchService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX38">
+<Item class="ModuleScript" referent="RBX40">
 <Properties>
 	<string name="Name">ScoringService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
 	ScoringService (ServerScriptService.ScoringService)
 	===================================================
-	STATUS: stub -- gameplay not implemented yet.
+	Hold-time bookkeeping: per-round accumulation, round winners, match
+	totals, rounds won, and MVP computation. Driven by MatchService:
 
-	Future responsibilities
-	-----------------------
-	* Record hold time per player per round (read EggService.GetHoldTimes() /
-	  EggService.GetCarrier(), snapshotting at Config.HoldTimeSyncInterval or
-	  on RoundEnd).
-	* Round winner = most TOTAL hold time in that round (tie -> shared/no win,
-	  decided when built).
-	* Match MVP = most hold time accumulated across ALL
-	  Config.RoundsPerMatch rounds.
-	* Expose results to MatchService and include them in the RoundEnded /
-	  MatchEnded remote payloads for the GUI.
+	  StartRound()        -- zero the round clock and begin accumulating
+	  EndRound()          -- stop accumulating, settle the final partial tick,
+	                         merge round times into match totals, award the
+	                         round win(s), return ranked results
+	  GetFinalStandings() -- MatchEnded payload (standings + MVPs)
+	  ResetMatch()        -- clear everything between matches
+
+	Accumulation: a 10 Hz ticker adds dt to the CURRENT carrier's round time
+	(read from EggService.GetCarrier()). While the egg is loose, respawning,
+	or nobody carries it, accumulation pauses automatically. EndRound settles
+	the remaining partial tick first, so a player carrying at the EXACT moment
+	the round expires keeps that time.
+
+	Rules implemented:
+	  * Round winner = most hold time this round (exact ties share the win and
+	    each get a round win; all-zero round = no winner).
+	  * MVP = highest TOTAL hold time across all rounds, chosen among players
+	    still in the server at match end (ties share MVP).
+
+	Leavers: when a player leaves mid-match their match totals migrate to a
+	"ghost" record (name + userId) so final standings stay complete. The
+	partial round they were in is forfeited (not merged into totals).
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+-- One-directional dependency: Scoring reads possession from EggService.
+local EggService = require(ServerScriptService:WaitForChild("EggService"))
 
 local ScoringService = {}
 
-function ScoringService.Init()
-	-- TODO(scoring): per-round and per-match hold-time bookkeeping.
-	if Config.DebugVerboseLogging then
-		print("[ScoringService] stub initialized")
+local SCORING_TICK = 0.1 -- 10 Hz accumulation
+
+local roundTimes = {}  -- { [Player] = seconds } current round only
+local matchTimes = {}  -- { [Player] = seconds } summed across finished rounds
+local roundsWon = {}   -- { [Player] = int }
+local ghosts = {}      -- { [UserId] = {Name, UserId, MatchTime, RoundsWon} } leavers
+local roundActive = false
+local lastAccumTime = 0
+local initialized = false
+
+local EPSILON = 0.005 -- float tie tolerance (times are accumulated in dt steps)
+
+local function now()
+	return os.clock()
+end
+
+-- Add elapsed time to the current carrier's round total (pauses implicitly
+-- whenever there is no carrier: loose egg, respawning, between rounds).
+local function accumulate(dt)
+	if dt <= 0 then
+		return
 	end
+	local carrier = EggService.GetCarrier()
+	if carrier and carrier.Parent then
+		roundTimes[carrier] = (roundTimes[carrier] or 0) + dt
+	end
+end
+
+local function settle()
+	local currentTime = now()
+	local dt = currentTime - lastAccumTime
+	lastAccumTime = currentTime
+	if dt > SCORING_TICK * 3 then
+		dt = SCORING_TICK * 3 -- clamp: hitches must not award bonus time
+	end
+	accumulate(dt)
+end
+
+local function startTicker()
+	task.spawn(function()
+		while initialized do
+			if roundActive then
+				settle()
+			end
+			task.wait(SCORING_TICK)
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+function ScoringService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	Players.PlayerRemoving:Connect(function(player)
+		-- Preserve what they earned; forfeit the in-progress round partial.
+		local total = matchTimes[player]
+		local won = roundsWon[player]
+		if (total and total > 0) or (won and won > 0) then
+			ghosts[player.UserId] = {
+				Name = player.Name,
+				UserId = player.UserId,
+				MatchTime = total or 0,
+				RoundsWon = won or 0,
+			}
+		end
+		roundTimes[player] = nil
+		matchTimes[player] = nil
+		roundsWon[player] = nil
+	end)
+
+	startTicker()
+	print("[ScoringService] Initialized: hold-time bookkeeping live")
+end
+
+function ScoringService.StartRound()
+	roundTimes = {}
+	roundActive = true
+	lastAccumTime = now()
+end
+
+--[[
+	Ends the round and returns:
+	{
+	  WinnerPlayer : Player?      (nil when nobody scored; first of a tie)
+	  WinnerName   : string?
+	  Tied         : boolean      (multiple players shared the win)
+	  TopTime      : number       (winning round time)
+	  Entries      : { {Player, Name, UserId, RoundTime, MatchTime,
+	                    RoundsWon, IsWinner?} }  sorted by RoundTime desc
+	}
+	Round wins are awarded (and merged match totals updated) by this call.
+]]
+function ScoringService.EndRound()
+	if roundActive then
+		settle() -- the carrier at the exact expiry keeps their partial time
+	end
+	roundActive = false
+
+	-- Merge round times into match totals.
+	for player, time in pairs(roundTimes) do
+		matchTimes[player] = (matchTimes[player] or 0) + time
+	end
+
+	-- Ranked entries for everyone still in the server.
+	local entries = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		table.insert(entries, {
+			Player = player,
+			Name = player.Name,
+			UserId = player.UserId,
+			RoundTime = roundTimes[player] or 0,
+			MatchTime = matchTimes[player] or 0,
+			RoundsWon = roundsWon[player] or 0,
+		})
+	end
+	table.sort(entries, function(a, b)
+		if math.abs(a.RoundTime - b.RoundTime) > EPSILON then
+			return a.RoundTime > b.RoundTime
+		end
+		return a.Name < b.Name -- stable, deterministic order for ties
+	end)
+
+	-- Winner(s): everyone tied at the top time, provided anyone scored.
+	local topTime = entries[1] and entries[1].RoundTime or 0
+	local winners = {}
+	if topTime > EPSILON then
+		for _, entry in ipairs(entries) do
+			if entry.RoundTime >= topTime - EPSILON then
+				entry.IsWinner = true
+				roundsWon[entry.Player] = (roundsWon[entry.Player] or 0) + 1
+				entry.RoundsWon = roundsWon[entry.Player]
+				table.insert(winners, entry)
+			end
+		end
+	end
+
+	return {
+		WinnerPlayer = winners[1] and winners[1].Player or nil,
+		WinnerName = winners[1] and winners[1].Name or nil,
+		Tied = #winners > 1,
+		TopTime = topTime,
+		Entries = entries,
+	}
+end
+
+--[[
+	Final standings for MatchEnded:
+	{
+	  Standings : { {Player?, Name, UserId, TotalHoldTime, RoundsWon,
+	                 Left, IsMVP?} } sorted by TotalHoldTime desc
+	  MVPs      : subset of Standings (present players only, ties included)
+	  MVPNames  : { string }
+	  BestTotalHoldTime : number
+	}
+]]
+function ScoringService.GetFinalStandings()
+	local standings = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		table.insert(standings, {
+			Player = player,
+			Name = player.Name,
+			UserId = player.UserId,
+			TotalHoldTime = matchTimes[player] or 0,
+			RoundsWon = roundsWon[player] or 0,
+			Left = false,
+		})
+	end
+	for _, ghost in pairs(ghosts) do
+		table.insert(standings, {
+			Player = nil, -- left the server: name/userId only (remote-safe)
+			Name = ghost.Name,
+			UserId = ghost.UserId,
+			TotalHoldTime = ghost.MatchTime,
+			RoundsWon = ghost.RoundsWon,
+			Left = true,
+		})
+	end
+	table.sort(standings, function(a, b)
+		if math.abs(a.TotalHoldTime - b.TotalHoldTime) > EPSILON then
+			return a.TotalHoldTime > b.TotalHoldTime
+		end
+		return a.Name < b.Name
+	end)
+
+	-- MVP among players still present (ties share the title).
+	local best = 0
+	local mvps = {}
+	for _, entry in ipairs(standings) do
+		if not entry.Left then
+			if entry.TotalHoldTime > best + EPSILON then
+				best = entry.TotalHoldTime
+				mvps = { entry }
+			elseif best > EPSILON and entry.TotalHoldTime >= best - EPSILON then
+				table.insert(mvps, entry)
+			end
+		end
+	end
+	local mvpNames = {}
+	for _, entry in ipairs(mvps) do
+		entry.IsMVP = true
+		table.insert(mvpNames, entry.Name)
+	end
+
+	return {
+		Standings = standings,
+		MVPs = mvps,
+		MVPNames = mvpNames,
+		BestTotalHoldTime = best,
+	}
+end
+
+function ScoringService.ResetMatch()
+	roundTimes = {}
+	matchTimes = {}
+	roundsWon = {}
+	ghosts = {}
+	roundActive = false
+end
+
+function ScoringService.GetRoundTime(player)
+	return roundTimes[player] or 0
+end
+
+function ScoringService.GetMatchTime(player)
+	return matchTimes[player] or 0
+end
+
+function ScoringService.GetRoundsWon(player)
+	return roundsWon[player] or 0
+end
+
+function ScoringService.DebugState()
+	local parts = {}
+	for player, time in pairs(matchTimes) do
+		if player.Parent then
+			table.insert(parts, ("%s[round=%.1f match=%.1f won=%d]"):format(
+				player.Name, roundTimes[player] or 0, time, roundsWon[player] or 0))
+		end
+	end
+	table.sort(parts)
+	return "roundActive=" .. tostring(roundActive)
+		.. " | " .. (#parts > 0 and table.concat(parts, ", ") or "(no scores)")
 end
 
 return ScoringService
@@ -2164,35 +2805,161 @@ return ScoringService
 </Properties>
 </Item>
 </Item>
-<Item class="ServerStorage" referent="RBX39">
+<Item class="ServerStorage" referent="RBX41">
 <Properties>
 	<string name="Name">ServerStorage</string>
 </Properties>
 </Item>
-<Item class="SoundService" referent="RBX40">
+<Item class="SoundService" referent="RBX42">
 <Properties>
 	<string name="Name">Sound</string>
 </Properties>
 </Item>
-<Item class="StarterGui" referent="RBX41">
+<Item class="StarterGui" referent="RBX43">
 <Properties>
 	<string name="Name">StarterGui</string>
 </Properties>
 </Item>
-<Item class="StarterPack" referent="RBX42">
+<Item class="StarterPack" referent="RBX44">
 <Properties>
 	<string name="Name">StarterPack</string>
 </Properties>
 </Item>
-<Item class="StarterPlayer" referent="RBX43">
+<Item class="StarterPlayer" referent="RBX45">
 <Properties>
 	<string name="Name">StarterPlayer</string>
 </Properties>
-<Item class="StarterCharacterScripts" referent="RBX44">
+<Item class="StarterCharacterScripts" referent="RBX46">
 <Properties>
 	<string name="Name">StarterCharacterScripts</string>
 </Properties>
-<Item class="LocalScript" referent="RBX45">
+<Item class="LocalScript" referent="RBX47">
+<Properties>
+	<bool name="Disabled">false</bool>
+	<string name="Name">Animations</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	Animations (StarterPlayer.StarterCharacterScripts.Animations)
+	=============================================================
+	Plays character animations in response to server FeedbackEvents for the
+	LocalPlayer (dash, punch, throw) and replicated state (block/sprint
+	loops, carry loop via the HasEgg attribute).
+
+	Animation IDs live in Config.Animations. An EMPTY STRING means "not
+	uploaded yet" and is skipped silently -- so this system is fully wired
+	now and starts animating the moment real animation asset IDs are pasted
+	into Config (Creator Dashboard -> Animations -> upload -> rbxassetid://).
+
+	Mapping:
+	  DashStart   -> Config.Animations.Dash    (one-shot)
+	  PunchSwing  -> Config.Animations.Attack  (one-shot)
+	  EggThrown   -> Config.Animations.Throw   (one-shot)
+	  BlockStart/BlockEnd/BlockBroken -> Config.Animations.Block  (loop)
+	  SprintStart/SprintEnd           -> Config.Animations.Sprint (loop)
+	  HasEgg attribute true/false     -> Config.Animations.Carry  (loop)
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local FeedbackEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("FeedbackEvent")
+
+local player = Players.LocalPlayer
+local character = script.Parent
+local humanoid = character:WaitForChild("Humanoid")
+local animator = humanoid:WaitForChild("Animator")
+
+local tracks = {} -- kind -> AnimationTrack | false (false = tried, unavailable)
+
+local function getTrack(kind)
+	if tracks[kind] ~= nil then
+		return tracks[kind] or nil
+	end
+
+	local id = Config.Animations and Config.Animations[kind]
+	if type(id) ~= "string" or id == "" then
+		tracks[kind] = false -- not uploaded yet: skip silently
+		return nil
+	end
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = id
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(animation)
+	end)
+	animation:Destroy()
+
+	if ok and track then
+		tracks[kind] = track
+		return track
+	end
+
+	warn("[Animations] Could not load '" .. kind .. "' animation (" .. id .. ")")
+	tracks[kind] = false
+	return nil
+end
+
+local function playOneShot(kind)
+	local track = getTrack(kind)
+	if track then
+		track:Stop(0)
+		track:Play(0.1)
+	end
+end
+
+local function startLoop(kind)
+	local track = getTrack(kind)
+	if track then
+		track.Looped = true
+		track:Play(0.15)
+	end
+end
+
+local function stopLoop(kind)
+	local track = getTrack(kind)
+	if track then
+		track:Stop(0.15)
+	end
+end
+
+-- World feedback: only animate the LocalPlayer's own events.
+FeedbackEvent.OnClientEvent:Connect(function(kind, data)
+	if type(data) ~= "table" or data.Player ~= player then
+		return
+	end
+	if kind == "DashStart" then
+		playOneShot("Dash")
+	elseif kind == "PunchSwing" then
+		playOneShot("Attack")
+	elseif kind == "EggThrown" then
+		playOneShot("Throw")
+	elseif kind == "BlockStart" then
+		startLoop("Block")
+	elseif kind == "BlockEnd" or kind == "BlockBroken" then
+		stopLoop("Block")
+	elseif kind == "SprintStart" then
+		startLoop("Sprint")
+	elseif kind == "SprintEnd" then
+		stopLoop("Sprint")
+	end
+end)
+
+-- Carry loop: driven by the replicated HasEgg attribute (survives across
+-- pickup/fumble/throw without extra remotes).
+local function updateCarryLoop()
+	if player:GetAttribute("HasEgg") then
+		startLoop("Carry")
+	else
+		stopLoop("Carry")
+	end
+end
+
+player:GetAttributeChangedSignal("HasEgg"):Connect(updateCarryLoop)
+updateCarryLoop()
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="LocalScript" referent="RBX48">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">ClientInput</string>
@@ -2209,13 +2976,13 @@ return ScoringService
 
 	Bindings
 	--------
-	  Attack : Left Mouse, Gamepad X        (only when NOT carrying)
-	  Throw  : Q or F, Gamepad Y            (only when carrying)
-	  Block  : Right Mouse or E (hold), Gamepad L1
-	  Dash   : Left Shift or Space, Gamepad R1
-	           (Space intentionally still jumps too -- air-dashes are legal)
+	  Attack : Left Mouse, Gamepad X         (only when NOT carrying)
+	  Throw  : Q or F, Gamepad Y             (only when carrying)
+	  Block  : Right Mouse (hold), Gamepad L1
+	  Dash   : E, Gamepad R1                 (Space is pure jump again)
+	  Sprint : Left Shift (hold), Gamepad R2 -- drains stamina while held
 
-	Mobile: ContextActionService touch buttons are created for all four
+	Mobile: ContextActionService touch buttons are created for all five
 	abilities as a functional placeholder. The real mobile GUI comes in a
 	later prompt and should call the exposed functions below.
 
@@ -2224,8 +2991,10 @@ return ScoringService
 	  _G.CTEInput.Attack()
 	  _G.CTEInput.Throw()
 	  _G.CTEInput.Dash()
-	  _G.CTEInput.Block(true)   -- press
-	  _G.CTEInput.Block(false)  -- release
+	  _G.CTEInput.Block(true)    -- press
+	  _G.CTEInput.Block(false)   -- release
+	  _G.CTEInput.Sprint(true)   -- press
+	  _G.CTEInput.Sprint(false)  -- release
 
 	TODO(gui): when real buttons exist, consider sinking MouseButton1 here or
 	unbinding it so clicks on the HUD do not also punch.
@@ -2243,6 +3012,8 @@ local RequestThrow = Remotes:WaitForChild("RequestThrow")
 local RequestDash = Remotes:WaitForChild("RequestDash")
 local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+local RequestSprintStart = Remotes:WaitForChild("RequestSprintStart")
+local RequestSprintEnd = Remotes:WaitForChild("RequestSprintEnd")
 local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
 
 local player = Players.LocalPlayer
@@ -2271,8 +3042,9 @@ local function dash()
 	RequestDash:FireServer()
 end
 
--- Block is a HOLD: mouse button + key can overlap, so count the holds and
--- only tell the server about the first press / final release.
+-- Hold-style abilities (block/sprint): mouse button + key can overlap, so
+-- count the holds and only tell the server about the first press / final
+-- release.
 local blockDepth = 0
 
 local function setBlocking(blocking)
@@ -2289,11 +3061,28 @@ local function setBlocking(blocking)
 	end
 end
 
+local sprintDepth = 0
+
+local function setSprinting(sprinting)
+	if sprinting then
+		sprintDepth = sprintDepth + 1
+		if sprintDepth == 1 then
+			RequestSprintStart:FireServer()
+		end
+	else
+		sprintDepth = math.max(0, sprintDepth - 1)
+		if sprintDepth == 0 then
+			RequestSprintEnd:FireServer()
+		end
+	end
+end
+
 _G.CTEInput = {
 	Attack = attack,
 	Throw = throwEgg,
 	Dash = dash,
 	Block = setBlocking,
+	Sprint = setSprinting,
 }
 
 ---------------------------------------------------------------------------
@@ -2314,20 +3103,22 @@ local function throwAction(_, inputState)
 	return Enum.ContextActionResult.Pass
 end
 
-local function blockAction(_, inputState)
-	if inputState == Enum.UserInputState.Begin then
-		setBlocking(true)
-	elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
-		setBlocking(false)
-	end
-	return Enum.ContextActionResult.Pass
-end
-
 local function dashAction(_, inputState)
 	if inputState == Enum.UserInputState.Begin then
 		dash()
 	end
-	return Enum.ContextActionResult.Pass -- Pass so Space still jumps (air-dash)
+	return Enum.ContextActionResult.Pass
+end
+
+local function holdAction(setter)
+	return function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			setter(true)
+		elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+			setter(false)
+		end
+		return Enum.ContextActionResult.Pass
+	end
 end
 
 -- createTouchButton = true gives free (ugly) on-screen buttons on mobile
@@ -2337,10 +3128,12 @@ ContextActionService:BindAction("CTE_Attack", attackAction, true,
 	Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonX)
 ContextActionService:BindAction("CTE_Throw", throwAction, true,
 	Enum.KeyCode.Q, Enum.KeyCode.F, Enum.KeyCode.ButtonY)
-ContextActionService:BindAction("CTE_Block", blockAction, true,
-	Enum.UserInputType.MouseButton2, Enum.KeyCode.E, Enum.KeyCode.ButtonL1)
+ContextActionService:BindAction("CTE_Block", holdAction(setBlocking), true,
+	Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL1)
 ContextActionService:BindAction("CTE_Dash", dashAction, true,
-	Enum.KeyCode.LeftShift, Enum.KeyCode.Space, Enum.KeyCode.ButtonR1)
+	Enum.KeyCode.E, Enum.KeyCode.ButtonR1)
+ContextActionService:BindAction("CTE_Sprint", holdAction(setSprinting), true,
+	Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR2)
 
 ---------------------------------------------------------------------------
 -- Personal feedback (rejection reasons) -- print for now, GUI toast later
@@ -2353,6 +3146,7 @@ local PERSONAL_FEEDBACK = {
 	OnCooldown = true,
 	Stunned = true,
 	PunchWhiff = true,
+	Exhausted = true,
 }
 
 FeedbackEvent.OnClientEvent:Connect(function(kind, data)
@@ -2365,7 +3159,7 @@ end)
 </Properties>
 </Item>
 </Item>
-<Item class="StarterPlayerScripts" referent="RBX46">
+<Item class="StarterPlayerScripts" referent="RBX49">
 <Properties>
 	<string name="Name">StarterPlayerScripts</string>
 </Properties>

@@ -11,13 +11,13 @@
 
 	Bindings
 	--------
-	  Attack : Left Mouse, Gamepad X        (only when NOT carrying)
-	  Throw  : Q or F, Gamepad Y            (only when carrying)
-	  Block  : Right Mouse or E (hold), Gamepad L1
-	  Dash   : Left Shift or Space, Gamepad R1
-	           (Space intentionally still jumps too -- air-dashes are legal)
+	  Attack : Left Mouse, Gamepad X         (only when NOT carrying)
+	  Throw  : Q or F, Gamepad Y             (only when carrying)
+	  Block  : Right Mouse (hold), Gamepad L1
+	  Dash   : E, Gamepad R1                 (Space is pure jump again)
+	  Sprint : Left Shift (hold), Gamepad R2 -- drains stamina while held
 
-	Mobile: ContextActionService touch buttons are created for all four
+	Mobile: ContextActionService touch buttons are created for all five
 	abilities as a functional placeholder. The real mobile GUI comes in a
 	later prompt and should call the exposed functions below.
 
@@ -26,8 +26,10 @@
 	  _G.CTEInput.Attack()
 	  _G.CTEInput.Throw()
 	  _G.CTEInput.Dash()
-	  _G.CTEInput.Block(true)   -- press
-	  _G.CTEInput.Block(false)  -- release
+	  _G.CTEInput.Block(true)    -- press
+	  _G.CTEInput.Block(false)   -- release
+	  _G.CTEInput.Sprint(true)   -- press
+	  _G.CTEInput.Sprint(false)  -- release
 
 	TODO(gui): when real buttons exist, consider sinking MouseButton1 here or
 	unbinding it so clicks on the HUD do not also punch.
@@ -45,6 +47,8 @@ local RequestThrow = Remotes:WaitForChild("RequestThrow")
 local RequestDash = Remotes:WaitForChild("RequestDash")
 local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+local RequestSprintStart = Remotes:WaitForChild("RequestSprintStart")
+local RequestSprintEnd = Remotes:WaitForChild("RequestSprintEnd")
 local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
 
 local player = Players.LocalPlayer
@@ -73,8 +77,9 @@ local function dash()
 	RequestDash:FireServer()
 end
 
--- Block is a HOLD: mouse button + key can overlap, so count the holds and
--- only tell the server about the first press / final release.
+-- Hold-style abilities (block/sprint): mouse button + key can overlap, so
+-- count the holds and only tell the server about the first press / final
+-- release.
 local blockDepth = 0
 
 local function setBlocking(blocking)
@@ -91,11 +96,28 @@ local function setBlocking(blocking)
 	end
 end
 
+local sprintDepth = 0
+
+local function setSprinting(sprinting)
+	if sprinting then
+		sprintDepth = sprintDepth + 1
+		if sprintDepth == 1 then
+			RequestSprintStart:FireServer()
+		end
+	else
+		sprintDepth = math.max(0, sprintDepth - 1)
+		if sprintDepth == 0 then
+			RequestSprintEnd:FireServer()
+		end
+	end
+end
+
 _G.CTEInput = {
 	Attack = attack,
 	Throw = throwEgg,
 	Dash = dash,
 	Block = setBlocking,
+	Sprint = setSprinting,
 }
 
 ---------------------------------------------------------------------------
@@ -116,20 +138,22 @@ local function throwAction(_, inputState)
 	return Enum.ContextActionResult.Pass
 end
 
-local function blockAction(_, inputState)
-	if inputState == Enum.UserInputState.Begin then
-		setBlocking(true)
-	elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
-		setBlocking(false)
-	end
-	return Enum.ContextActionResult.Pass
-end
-
 local function dashAction(_, inputState)
 	if inputState == Enum.UserInputState.Begin then
 		dash()
 	end
-	return Enum.ContextActionResult.Pass -- Pass so Space still jumps (air-dash)
+	return Enum.ContextActionResult.Pass
+end
+
+local function holdAction(setter)
+	return function(_, inputState)
+		if inputState == Enum.UserInputState.Begin then
+			setter(true)
+		elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+			setter(false)
+		end
+		return Enum.ContextActionResult.Pass
+	end
 end
 
 -- createTouchButton = true gives free (ugly) on-screen buttons on mobile
@@ -139,10 +163,12 @@ ContextActionService:BindAction("CTE_Attack", attackAction, true,
 	Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonX)
 ContextActionService:BindAction("CTE_Throw", throwAction, true,
 	Enum.KeyCode.Q, Enum.KeyCode.F, Enum.KeyCode.ButtonY)
-ContextActionService:BindAction("CTE_Block", blockAction, true,
-	Enum.UserInputType.MouseButton2, Enum.KeyCode.E, Enum.KeyCode.ButtonL1)
+ContextActionService:BindAction("CTE_Block", holdAction(setBlocking), true,
+	Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL1)
 ContextActionService:BindAction("CTE_Dash", dashAction, true,
-	Enum.KeyCode.LeftShift, Enum.KeyCode.Space, Enum.KeyCode.ButtonR1)
+	Enum.KeyCode.E, Enum.KeyCode.ButtonR1)
+ContextActionService:BindAction("CTE_Sprint", holdAction(setSprinting), true,
+	Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR2)
 
 ---------------------------------------------------------------------------
 -- Personal feedback (rejection reasons) -- print for now, GUI toast later
@@ -155,6 +181,7 @@ local PERSONAL_FEEDBACK = {
 	OnCooldown = true,
 	Stunned = true,
 	PunchWhiff = true,
+	Exhausted = true,
 }
 
 FeedbackEvent.OnClientEvent:Connect(function(kind, data)

@@ -4,10 +4,11 @@
 	Server bootstrap. Runs once when the server starts.
 
 	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service modules. As of Task 3, EggService AND
-	     CombatService are LIVE (pickup/carry/hold time/fumble/respawn +
-	     attack/throw/block/dash/stamina). Match, Scoring and Data remain
-	     documented stubs.
+	  2. Initializes the service modules. As of Task 4, Egg, Combat, Scoring
+	     and Match are LIVE (full match loop: lobby -> countdown -> 3 rounds
+	     of 75s -> MVP + standings). Match initializes LAST because its state
+	     machine starts immediately and drives the other services. Only Data
+	     remains a reserved stub.
 	  3. Wires CombatService into EggService as the thrown-egg impact handler
 	     (dependency injection -- keeps the require graph one-directional).
 	  4. Creates the debug bridges (STUDIO ONLY, gated by
@@ -44,6 +45,8 @@ local EXPECTED_REMOTES = {
 	"RequestDash",
 	"RequestBlockStart",
 	"RequestBlockEnd",
+	"RequestSprintStart",
+	"RequestSprintEnd",
 	-- server -> client (replicated state + polish hooks)
 	"EggPossessionChanged",
 	"HoldTimeUpdated",
@@ -68,7 +71,10 @@ local CombatService = require(ServerScriptService:WaitForChild("CombatService"))
 local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
 local DataService = require(ServerScriptService:WaitForChild("DataService"))
 
-for _, service in ipairs({ MatchService, EggService, CombatService, ScoringService, DataService }) do
+-- Init order matters: MatchService last -- its loop starts immediately and
+-- orchestrates EggService (round spawns/pickup gating) and ScoringService
+-- (round bookkeeping), which must already be live.
+for _, service in ipairs({ EggService, CombatService, ScoringService, MatchService, DataService }) do
 	if type(service.Init) == "function" then
 		service.Init()
 	end
@@ -93,8 +99,10 @@ local function runDebugCommand(command, argument)
 	elseif command == "respawn_egg" then
 		EggService.RespawnEggNow()
 	elseif command == "state" then
+		print("[Debug] match : " .. MatchService.DebugState())
 		print("[Debug] egg   : " .. EggService.DebugState())
 		print("[Debug] combat: " .. CombatService.DebugState())
+		print("[Debug] score : " .. ScoringService.DebugState())
 	else
 		warn('[Debug] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
 	end
@@ -123,4 +131,4 @@ debugCommands.Event:Connect(function(command, argument)
 	runDebugCommand(command, argument)
 end)
 
-print("[Clutch the Egg] Server bootstrap complete -- egg + combat live (Task 3); match/scoring are stubs")
+print("[Clutch the Egg] Server bootstrap complete -- egg + combat + scoring + match loop live (Task 4)")

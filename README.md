@@ -10,15 +10,29 @@ egg loose; "HANDS FULL" otherwise), **Throw** (only when holding — lob it to a
 teammate or at an enemy), **Block** (always — reduces knockback; while holding
 you still gain hold time but move 50% slower), **Dash** (always — while
 holding it's shorter, has NO i-frames, and dashing into a player drops the
-egg). If the egg leaves the arena it respawns at the center after 3 seconds
-and hold time pauses.
+egg), **Sprint** (hold — the main stamina drain). If the egg leaves the arena
+it respawns at the center after 3 seconds and hold time pauses.
 
 ---
 
-## Current status: Task 3 — egg system + combat + client input are LIVE
+## Current status: Task 4 — FULL MATCH LOOP is LIVE
 
-Open **[`ClutchTheEgg.rbxlx`](ClutchTheEgg.rbxlx)** in Roblox Studio and press
-Play. Everything below is server-authoritative; clients only send requests.
+Open **[`ClutchTheEgg.rbxlx`](ClutchTheEgg.rbxlx)** in Roblox Studio, press
+**Test → Local Server → 2 players** (a match needs 2+; solo F5 waits in the
+lobby by design). The server runs:
+
+```
+Lobby (2+ of 6 players) -> Countdown (3..2..1) -> RoundPlaying (75s)
+  -> RoundEnd (winner announced, 4s) -> x3 rounds
+  -> MatchEnd (MVP + final standings, 8s) -> Lobby ...
+```
+
+Round winners, per-round standings, the MVP and final standings are **printed
+to the server Output** and fired over `RoundEnded` / `MatchEnded` /
+`MatchStateChanged` remotes for the future GUI.
+
+**Fast testing:** set `Config.DebugQuickMatch = true` → 15-second rounds
+(a full 3-round match takes ~1 minute instead of ~4.5).
 
 ### Controls
 
@@ -26,109 +40,119 @@ Play. Everything below is server-authoritative; clients only send requests.
 | --- | --- | --- | --- |
 | Attack (not carrying only) | **Left Mouse** | X | CAS touch button (placeholder) |
 | Throw (carrying only) | **Q** or **F** | Y | CAS touch button (placeholder) |
-| Block (hold) | **Right Mouse** or **E** | L1 | CAS touch button (placeholder) |
-| Dash | **Left Shift** or **Space** (jump still works — air-dashes are legal) | R1 | CAS touch button (placeholder) |
+| Block (hold) | **Right Mouse** | L1 | CAS touch button (placeholder) |
+| Dash | **E** | R1 | CAS touch button (placeholder) |
+| Sprint (hold — drains stamina) | **Left Shift** | R2 | CAS touch button (placeholder) |
 
-The real mobile GUI comes in a later prompt and should call the exposed API:
-`_G.CTEInput.Attack() / .Throw() / .Dash() / .Block(true|false)`.
+Space is pure jump again. The real mobile GUI comes later and should call
+`_G.CTEInput.Attack() / .Throw() / .Dash() / .Block(bool) / .Sprint(bool)`.
 
-### Ability rules implemented (all validated server-side)
+### Animations (wired, awaiting assets)
 
-* **Attack** — rejected with `HandsFull` feedback while carrying. Range
-  `AttackRange` + forward hemisphere, 0.6 s cooldown, 10 stamina. Hits apply
-  knockback 25 (+8 up) and 0.25 s hitstun; blocked victims take 60 % less and
-  no hitstun; i-framed victims are untouched. **Hitting the carrier calls
-  `EggService.Fumble(victim, "Attacked", knockLoosePop)` → `EggStolen`
-  feedback** (the steal). Whiffs report `PunchWhiff` privately.
-* **Throw** — rejected with `NotCarrying` when not holding. Launches the egg
-  at `ThrowSpeed` 60 (+12 upward bias) where you face; hold time stops the
-  instant it leaves your hands. For ~0.8 s (and while faster than 18 studs/s)
-  the egg is **"hot"**: it knocks back any player it hits (14 + 6 up, 0.15 s
-  stagger) and bounces loose — no catching in this version, plain loose-pickup
-  once it slows (team catches come later). Thrower lockout 0.8 s.
-* **Block** — always usable (hold). Incoming knockback ×(1−0.6), move speed
-  ×0.5, drains 15 stamina/s, breaks automatically at 0 (`BlockBroken`).
-  **A blocking carrier STILL accrues hold time** (EggService doesn't care
-  about blocking). Blocking does *not* prevent being fumbled by a punch —
-  only dash i-frames do.
-* **Dash** — always usable. Not carrying: +24 speed for 0.25 s, 0.2 s
-  i-frames, 25 stamina, 2.5 s cooldown. Carrying: +16 speed for 0.15 s, **no
-  i-frames**, 30 stamina — and **colliding with a player within 4 studs
-  fumbles the egg** (`DashFumble` feedback + small knockback to the victim).
-* **Stamina** — max 100, regen 20/s starting 0.75 s after any spend.
-  Published to clients as the rounded `Stamina` Player attribute (HUD-ready).
-* **Speed authority** — CombatService is the only writer of `WalkSpeed`:
-  base = carrier ? 12 : 16, ×0.5 while blocking, 0 while stunned, dash
-  override during bursts. Recalculated at 20 Hz, written only on change.
+`StarterCharacterScripts.Animations` plays character animations from
+**`Config.Animations`** — upload animations via the Creator Dashboard and
+paste the `rbxassetid://...` URLs into the matching slots (`Dash`, `Attack`,
+`Throw`, `Block` loop, `Sprint` loop, `Carry` loop). Empty string = skipped
+silently, so everything runs before any asset exists. Triggers are the
+`FeedbackEvent` kinds listed below plus the replicated `HasEgg` attribute.
 
-### Testing in Studio
+### Match / scoring rules implemented
 
-> **Note:** the Studio command bar runs in **client context** while playing,
-> so it cannot see `ServerScriptService` children (that's why the old
-> `require(...EggService).Fumble()` command-bar trick errored). Use the new
-> Studio-only `DebugCommand` remote instead:
+* Lobby starts the countdown at `MinPlayersToStart` (2) players, cap 6.
+  Countdown aborts back to Lobby if players drop below the minimum.
+* Hold time accrues per-round for the current carrier at 10 Hz
+  (ScoringService); it **pauses automatically while the egg is loose or
+  respawning** (no carrier). A carrier at the **exact expiry keeps their
+  partial-second time** (scoring settles before the egg is parked).
+* Round winner = most round hold time (exact ties share the win; an all-zero
+  round has no winner). Round times clear each round; **match totals persist**.
+* After 3 rounds: **MVP = highest total match hold time** (ties shared;
+  only players still in the server are MVP-eligible).
+* **Leavers:** leaving fumbles the egg (EggService); their match totals
+  become "ghost" standings entries (`Player = nil`, `Left = true`) so the
+  final standings stay complete; the in-progress round partial is forfeited.
+* Egg out of bounds mid-round: unchanged EggService behavior — hold time
+  pauses, egg respawns at center after 3 s, the round keeps running.
+* Pickups are gated to `RoundPlaying` only (`EggService.SetEnabled`); between
+  rounds the egg sits visible at center but cannot be grabbed.
+
+### Sprint & stamina
+
+Sprint (hold Shift) adds `SprintSpeedBonus` (6) to base speed — even while
+carrying — and drains `SprintStaminaDrain` (12/s). Blocking, stun and dash
+suppress sprinting. At 0 stamina you're **exhausted** until stamina recovers
+to `SprintResumeStamina` (25). Block drains 15/s and breaks at 0. Dash costs
+25 (30 carrying), attack 10. Regen is 20/s starting 0.75 s after any spend.
+The rounded value is published as the replicated **`Stamina` player
+attribute** for the future HUD.
+
+### Testing in Studio (command bar)
+
+> The command bar runs in **client context** while playing, so use the
+> Studio-only `DebugCommand` remote (ServerScriptService is invisible there):
 
 ```lua
-game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")            -- drop current carrier's egg
-game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "Name")    -- drop a specific player's egg
-game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")       -- force center respawn
-game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")             -- egg + combat state dump
+game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")          -- drop current carrier's egg
+game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")     -- force center respawn
+game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")           -- match/egg/combat/score dump
 ```
 
-(Server-side/Run mode: `game.ServerScriptService.DebugCommands:Fire("fumble")`
-still works too. Both paths are hard-gated to `RunService:IsStudio()` and
-`Config.DebugAllowCommandBar`.)
+**2-player checklist (Local Server, 2 players, `DebugQuickMatch = true`):**
 
-**2-player checklist (Test → Local Server, 2 players):**
-
-1. Player 1 grabs the egg (walk into it) → slower, `HasEgg` attribute on.
-2. Player 2 punches Player 1 (LMB within 5 studs, facing) → knockback +
-   hitstun, egg pops loose (`EggStolen` in server log), Player 2 grabs it.
-3. Carrier throws (Q/F) → egg lobs out; a hot egg hitting the other player
-   knocks them back and bounces loose; after it slows, either can pick it up.
-4. Both hold block (RMB/E) → half speed; punches push them 60 % less; carrier
-   blocker's hold time keeps climbing in `DebugCommand "state"`.
-5. Both dash (Shift/Space) → non-carrier gets brief i-frames (punches whiff:
-   `IFrameDodge`); carrier dash is shorter and **dashing into the other player
-   fumbles the egg** (`DashFumble`).
-6. Stamina: spam dash/attack/block → `NoStamina`/`OnCooldown` rejections,
-   regen after 0.75 s idle; blocking to 0 breaks the block.
+1. Both join → countdown → round 1 starts, egg drops at center.
+2. Grab/steal/throw/dash-fumble as before; hold times accrue for whoever
+   carries (`DebugCommand "state"` shows round/match totals live).
+3. Round expires → Output prints winner + per-player standings;
+   `RoundEnded` fires; egg resets to center; pickups locked during the pause.
+4. After 3 rounds → Output prints **MVP + final standings**; `MatchEnded`
+   fires; intermission; back to Lobby.
+5. Mid-round, close one client → remaining player's round continues, leaver
+   shows as `left match` in the final standings.
+6. Sprint with Shift → faster, stamina drops; hold until 0 → `Exhausted`,
+   walk speed back to normal, regen resumes.
 
 ### Remote payload contracts (server → all clients)
 
 | Remote | Payload |
 | --- | --- |
+| `MatchStateChanged` | `(stateName, data)` — states: `"Lobby"` `{Players, MinPlayersToStart, MaxPlayers}`, `"Countdown"` `{StartsIn}` (0 = GO), `"RoundPlaying"` `{Round, RoundsPerMatch, RoundLength?, TimeLeft}` (~1 Hz clock), `"RoundEnd"` `{Round, WinnerName?, NextRoundIn}`, `"MatchEnd"` `{MVPNames, BestTotalHoldTime, NextLobbyIn}` |
+| `RoundEnded` | `(roundNumber, results)` — `results = {WinnerPlayer?, WinnerName?, Tied, TopTime, Entries = {{Player, Name, UserId, RoundTime, MatchTime, RoundsWon, IsWinner?}} sorted}` |
+| `MatchEnded` | `(final)` — `{Standings = {{Player?, Name, UserId, TotalHoldTime, RoundsWon, Left, IsMVP?}}, MVPs, MVPNames, BestTotalHoldTime}` |
 | `EggPossessionChanged` | `(newCarrier: Player?, previousCarrier: Player?)` |
-| `HoldTimeUpdated` | `(entries)` — array of `{ Player, HoldTime }`, sorted desc; ~10 Hz while carried + one final push after changes |
-| `FeedbackEvent` | `(kind: string, data: table)` — see kinds below |
-| `MatchStateChanged` / `RoundEnded` / `MatchEnded` | reserved for MatchService/ScoringService (later) |
+| `HoldTimeUpdated` | `(entries)` — array of `{Player, HoldTime}` (match-scoped live feed), sorted desc, ~10 Hz while carried |
+| `FeedbackEvent` | `(kind, data)` — see catalog below |
 
-Client → server: `RequestAttack`, `RequestThrow`, `RequestDash`,
-`RequestBlockStart`, `RequestBlockEnd` — **all sent with no arguments**; the
-server computes targets/directions itself and ignores any payload (cheaters
-gain nothing). `DebugCommand` (`command`, `playerName?`) is Studio-gated.
+Client → server (all **argument-free**, server computes everything):
+`RequestAttack`, `RequestThrow`, `RequestDash`, `RequestBlockStart`,
+`RequestBlockEnd`, `RequestSprintStart`, `RequestSprintEnd`.
+`DebugCommand` (`command`, `playerName?`) is Studio-gated.
 
-`FeedbackEvent` kinds — world (FireAllClients): `PunchSwing`, `PunchHit`
-(incl. `Result` = Hit/Blocked/IFramed), `BlockedHit`, `IFrameDodge`,
-`EggStolen`, `EggThrown`, `EggImpact`, `DashStart` (incl. `Carrying`),
-`DashFumble`, `BlockStart`, `BlockEnd`, `BlockBroken`, `EggPickup`,
-`EggFumble`, `EggOutOfBounds`, `EggRespawn`. Personal (FireClient):
-`HandsFull`, `NotCarrying`, `NoStamina`, `OnCooldown`, `Stunned`,
-`PunchWhiff`.
+`FeedbackEvent` kind catalog — world (FireAllClients): `PunchSwing`,
+`PunchHit` (`Result` = Hit/Blocked/IFramed), `BlockedHit`, `IFrameDodge`,
+`EggStolen`, `EggThrown`, `EggImpact`, `DashStart` (`Carrying`), `DashFumble`,
+`BlockStart`, `BlockEnd`, `BlockBroken`, `SprintStart`, `SprintEnd`,
+`EggPickup`, `EggFumble` (`Reason`), `EggOutOfBounds`, `EggRespawn`.
+Personal (FireClient): `HandsFull`, `NotCarrying`, `NoStamina`, `OnCooldown`,
+`Stunned`, `PunchWhiff`, `Exhausted`.
 
 ### Service APIs (server)
 
-*EggService:* `Init()`, `StartRound()`, `EndRound()`, `GetCarrier()`,
-`GetEgg()`, `GetState()`, `GetHoldTime(p)`, `GetHoldTimes()`,
-`ResetHoldTimes()`, `Fumble(target?, reason?, popVelocity?)`,
+*MatchService:* `Init()`, `GetState()`, `GetRound()`, `DebugState()`.
+
+*ScoringService:* `Init()`, `StartRound()`, `EndRound()` → ranked results,
+`GetFinalStandings()`, `ResetMatch()`, `GetRoundTime(p)`, `GetMatchTime(p)`,
+`GetRoundsWon(p)`, `DebugState()`.
+
+*EggService:* `Init()`, `StartRound()`, `EndRound()`, `SetEnabled(bool)`,
+`IsEnabled()`, `GetCarrier()`, `GetEgg()`, `GetState()`, `GetHoldTime(p)`,
+`GetHoldTimes()`, `ResetHoldTimes()`, `Fumble(target?, reason?, popVelocity?)`,
 `ReleaseThrow(player, direction)`, `RespawnEggNow()`, `IsEggHot()`,
 `GetThrower()`, `SetImpactHandler(fn)`, `DebugState()`.
 
-*CombatService:* `Init()`, `ApplyKnockback(player, direction, force,
-upwardForce?, stunTime?)` → `"Hit"/"Blocked"/"IFramed"/"Invalid"`,
-`HandleEggImpact(player, eggVelocity)` (injected into EggService by Main),
-`GetStamina(p)`, `IsBlocking(p)`, `IsDashing(p)`, `HasIFrames(p)`,
-`IsStunned(p)`, `DebugState()`.
+*CombatService:* `Init()`, `ApplyKnockback(player, dir, force, upForce?,
+stunTime?)` → `"Hit"/"Blocked"/"IFramed"/"Invalid"`, `HandleEggImpact(p, v)`,
+`GetStamina(p)`, `IsBlocking(p)`, `IsSprinting(p)`, `IsDashing(p)`,
+`HasIFrames(p)`, `IsStunned(p)`, `DebugState()`.
 
 ## Quick start (building the place)
 
@@ -164,12 +188,13 @@ rojo build -o ClutchTheEgg.rbxlx
 | `src/ReplicatedStorage/Modules/Config.lua`           | `ReplicatedStorage.Modules.Config`               | ModuleScript  |
 | remotes (declared in `default.project.json`)         | `ReplicatedStorage.Remotes.*`                    | RemoteEvent   |
 | `src/ServerScriptService/Main.server.lua`            | `ServerScriptService.Main` (+ `DebugCommands` BindableEvent at runtime) | Script |
-| `src/ServerScriptService/MatchService.lua`           | `ServerScriptService.MatchService`               | ModuleScript  |
+| `src/ServerScriptService/MatchService.lua`           | `ServerScriptService.MatchService` (**implemented**) | ModuleScript |
 | `src/ServerScriptService/EggService.lua`             | `ServerScriptService.EggService` (**implemented**) | ModuleScript |
 | `src/ServerScriptService/CombatService.lua`          | `ServerScriptService.CombatService` (**implemented**) | ModuleScript |
-| `src/ServerScriptService/ScoringService.lua`         | `ServerScriptService.ScoringService`             | ModuleScript  |
+| `src/ServerScriptService/ScoringService.lua`         | `ServerScriptService.ScoringService` (**implemented**) | ModuleScript |
 | `src/ServerScriptService/DataService.lua`            | `ServerScriptService.DataService` (reserved)     | ModuleScript  |
-| `src/StarterPlayer/StarterCharacterScripts/ClientInput.client.lua` | `StarterPlayer.StarterCharacterScripts.ClientInput` (**implemented**) | LocalScript |
+| `src/StarterPlayer/StarterCharacterScripts/ClientInput.client.lua` | `…StarterCharacterScripts.ClientInput` (**implemented**) | LocalScript |
+| `src/StarterPlayer/StarterCharacterScripts/Animations.client.lua` | `…StarterCharacterScripts.Animations` (**implemented**) | LocalScript |
 | `src/Workspace/Arena.rbxmx`                          | `Workspace.Arena` (generated by `tools/gen_arena.py`) | Model    |
 | `ClutchTheEgg.rbxlx`                                 | the runnable place file (build artifact)         | —             |
 
@@ -205,17 +230,16 @@ Geometry constants live in `tools/gen_arena.py` and are documented by the
 
 ## Next steps (future prompts)
 
-- [x] Egg: spawn, auto-pickup, possession + hold-time accrual, fumble,
-      out-of-arena respawn (Task 2)
-- [x] Combat: attack/knockback/steal, throw with hot-egg impacts, block,
-      dash with carry rules + i-frames, stamina (Task 3)
-- [x] Client input: keyboard/mouse/gamepad + placeholder mobile touch
-      buttons + `_G.CTEInput` API for the GUI (Task 3)
-- [ ] Match: state machine, round clock, best-of-3, winners + MVP
-      (calls `EggService.StartRound()/EndRound()/ResetHoldTimes()`)
-- [ ] GUI: HUD — hold-time leaderboard (`HoldTimeUpdated`), stamina bar
-      (`Stamina` attribute), cooldowns, real mobile buttons (`_G.CTEInput`),
-      feedback toasts (`FeedbackEvent`)
-- [ ] Data: persistence
-- [ ] Polish: egg mesh, VFX/SFX via `FeedbackEvent` hooks; line-of-sight
-      check for proximity pickup; catch mechanic for team mode
+- [x] Egg system (Task 2)
+- [x] Combat: attack/throw/block/dash + stamina (Task 3)
+- [x] Match: lobby → countdown → 3×75 s rounds → MVP + standings; scoring
+      bookkeeping; sprint stamina sink; E/Shift rebinds; animation wiring
+      (Task 4)
+- [ ] GUI: HUD — round clock + state (`MatchStateChanged`), hold-time
+      leaderboard (`HoldTimeUpdated`), round/match results screens
+      (`RoundEnded`/`MatchEnded`), stamina bar (`Stamina` attribute), real
+      mobile buttons (`_G.CTEInput`), feedback toasts (`FeedbackEvent`)
+- [ ] Data: persistence (wins, MVPs) via DataService
+- [ ] Polish: egg mesh, VFX/SFX via `FeedbackEvent` hooks, upload animations
+      into `Config.Animations`, line-of-sight for proximity pickup, team mode
+      + catching

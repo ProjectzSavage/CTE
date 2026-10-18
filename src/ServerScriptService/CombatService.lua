@@ -1,10 +1,10 @@
 --[[
 	CombatService (ServerScriptService.CombatService)
 	=================================================
-	Server-authoritative abilities: Attack, Throw, Block, Dash + the shared
-	stamina pool. Clients only fire Request* RemoteEvents; EVERY rule is
-	checked here (context, cooldown, stamina, alive/stun state). Cheaters get
-	rejected and nothing happens.
+	Server-authoritative abilities: Attack, Throw, Block, Dash, Sprint + the
+	shared stamina pool. Clients only fire Request* RemoteEvents; EVERY rule
+	is checked here (context, cooldown, stamina, alive/stun state). Cheaters
+	get rejected and nothing happens.
 
 	Ability rules (from the game spec)
 	----------------------------------
@@ -16,33 +16,41 @@
 	Throw  : ONLY when holding the egg. Launches it via EggService.ReleaseThrow
 	         at Config.ThrowSpeed with an upward lob. While "hot", the thrown
 	         egg knocks players back and bounces loose (HandleEggImpact).
-	Block  : ALWAYS usable. Incoming knockback reduced by
+	Block  : ALWAYS usable (hold). Incoming knockback reduced by
 	         Config.BlockKnockbackReduction, move speed multiplied by
 	         Config.BlockSpeedMultiplier, drains Config.BlockStaminaDrain/s.
 	         A blocking carrier STILL accrues hold time (EggService does not
 	         care about blocking). Block breaks automatically at 0 stamina.
-	Dash   : ALWAYS usable. Speed burst for Config.DashDuration. NOT carrying:
-	         brief i-frames (Config.DashIFrames). Carrying: shorter dash, NO
-	         i-frames, and colliding with a player fumbles the egg
-	         ("DashFumble" feedback + small knockback to the victim).
+	Dash   : ALWAYS usable (default key E). Speed burst for
+	         Config.DashDuration. NOT carrying: brief i-frames
+	         (Config.DashIFrames). Carrying: shorter dash, NO i-frames, and
+	         colliding with a player within Config.DashCollisionRadius
+	         fumbles the egg ("DashFumble" + small knockback to the victim).
+	Sprint : ALWAYS usable (hold, default key Shift) -- the main stamina
+	         sink. +Config.SprintSpeedBonus speed (works while carrying too),
+	         drains Config.SprintStaminaDrain/s. Blocking, stun and dash
+	         suppress sprinting; at 0 stamina the sprinter is "exhausted"
+	         until stamina recovers to Config.SprintResumeStamina.
 
 	Stamina: max Config.StaminaMax, regenerates Config.StaminaRegenPerSecond
 	         after Config.StaminaRegenDelay without spending. Dash and Attack
-	         cost stamina up front; Block drains while held. Published to
-	         clients as the "Stamina" Player attribute (rounded) for the future
-	         HUD.
+	         cost stamina up front; Block and Sprint drain while active.
+	         Published to clients as the rounded "Stamina" Player attribute
+	         (HUD-ready).
 
 	Speed ownership: this module is the ONLY writer of Humanoid.WalkSpeed.
-	         Base = carrier ? CarrySpeed : WalkSpeed, then block/stun/dash
-	         modifiers. Recalculated every tick (writes only on change) plus
-	         on HasEgg attribute changes.
+	         Base = carrier ? CarrySpeed : WalkSpeed, + SprintSpeedBonus while
+	         sprinting, x BlockSpeedMultiplier while blocking, 0 while
+	         stunned, dash override during bursts. Recalculated every tick
+	         (writes only on change) plus on HasEgg attribute changes.
 
 	FeedbackEvent kinds fired here
 	------------------------------
 	FireAllClients : PunchSwing, PunchHit, BlockedHit, IFrameDodge, EggStolen,
-	                 DashStart, DashFumble, BlockStart, BlockEnd, BlockBroken
+	                 DashStart, DashFumble, BlockStart, BlockEnd, BlockBroken,
+	                 SprintStart, SprintEnd
 	FireClient     : HandsFull, NotCarrying, NoStamina, OnCooldown, Stunned,
-	                 PunchWhiff
+	                 PunchWhiff, Exhausted
 ]]
 
 local Players = game:GetService("Players")
@@ -60,6 +68,8 @@ local RequestThrow = Remotes:WaitForChild("RequestThrow")
 local RequestDash = Remotes:WaitForChild("RequestDash")
 local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+local RequestSprintStart = Remotes:WaitForChild("RequestSprintStart")
+local RequestSprintEnd = Remotes:WaitForChild("RequestSprintEnd")
 local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
 
 local CombatService = {}
@@ -84,6 +94,9 @@ local function newStatus()
 		publishedStamina = -1, -- forces the first attribute publish
 		lastSpendTime = -math.huge,
 		blocking = false,
+		sprinting = false,       -- client is HOLDING the sprint input
+		sprintEffective = false, -- sprint is actually active (not suppressed)
+		sprintLocked = false,    -- exhausted: locked until SprintResumeStamina
 		attackReadyAt = 0,
 		dashReadyAt = 0,
 		dashUntil = 0,
@@ -142,6 +155,16 @@ local function spendStamina(status, amount)
 	return true
 end
 
+-- Sprint is suppressed by blocking, stun, dash and exhaustion.
+local function computeSprintEffective(status, nowv)
+	return status.sprinting
+		and not status.blocking
+		and not status.sprintLocked
+		and status.stamina > 0
+		and nowv >= status.stunUntil
+		and nowv >= status.dashUntil
+end
+
 -- The single authority for movement speed. Called every tick and on state
 -- flips; only writes when the value actually changes (no property churn).
 local function recalcSpeed(player)
@@ -165,6 +188,9 @@ local function recalcSpeed(player)
 	else
 		local isCarrier = (EggService.GetCarrier() == player)
 		speed = isCarrier and Config.CarrySpeed or Config.WalkSpeed
+		if computeSprintEffective(status, nowv) then
+			speed = speed + Config.SprintSpeedBonus
+		end
 		if status.blocking then
 			speed = speed * Config.BlockSpeedMultiplier
 		end
@@ -498,7 +524,7 @@ local function handleBlockStart(player)
 	if not status.blocking then
 		status.blocking = true
 		broadcastFeedback("BlockStart", { Player = player })
-		recalcSpeed(player)
+		recalcSpeed(player) -- blocking also suppresses sprint (recalc handles it)
 	end
 end
 
@@ -509,6 +535,23 @@ local function handleBlockEnd(player)
 		broadcastFeedback("BlockEnd", { Player = player })
 		recalcSpeed(player)
 	end
+end
+
+---------------------------------------------------------------------------
+-- Sprint (hold Shift: the main stamina drain)
+---------------------------------------------------------------------------
+
+local function handleSprintStart(player)
+	if not getAliveCharacter(player) then
+		return
+	end
+	-- No stamina gate here: the tick decides effectiveness (exhaustion
+	-- hysteresis lives there so SprintStart/SprintEnd feedback is truthful).
+	getStatus(player).sprinting = true
+end
+
+local function handleSprintEnd(player)
+	getStatus(player).sprinting = false
 end
 
 ---------------------------------------------------------------------------
@@ -540,7 +583,13 @@ local function bindPlayer(player)
 	player.CharacterAdded:Connect(function()
 		-- Fresh life: clear transient states, refill stamina, re-apply speed.
 		local status = getStatus(player)
+		if status.sprintEffective then
+			broadcastFeedback("SprintEnd", { Player = player })
+		end
 		status.blocking = false
+		status.sprinting = false
+		status.sprintEffective = false
+		status.sprintLocked = false
 		status.dashUntil = 0
 		status.dashCollisionDone = false
 		status.iFramesUntil = 0
@@ -561,7 +610,7 @@ local function bindPlayer(player)
 end
 
 ---------------------------------------------------------------------------
--- Ticker (20 Hz): stamina, dash windows, collisions, speed, attribute publish
+-- Ticker (20 Hz): stamina, sprint/block drains, dash windows, collisions
 ---------------------------------------------------------------------------
 
 local function tickOnce()
@@ -574,11 +623,12 @@ local function tickOnce()
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		local status = getStatus(player)
+		local drained = false
 
-		-- Stamina: block drains; otherwise regen after a short delay.
+		-- Block drain (breaks the block at 0 stamina).
 		if status.blocking then
 			status.stamina = status.stamina - Config.BlockStaminaDrain * dt
-			status.lastSpendTime = nowv
+			drained = true
 			if status.stamina <= 0 then
 				status.stamina = 0
 				status.blocking = false
@@ -587,6 +637,31 @@ local function tickOnce()
 					print("[CombatService] " .. player.Name .. "'s block broke (out of stamina)")
 				end
 			end
+		end
+
+		-- Sprint: effectiveness (blocking/stun/dash/exhaustion suppress it),
+		-- drain while effective, exhaustion hysteresis, edge feedback.
+		local sprintEffective = computeSprintEffective(status, nowv)
+		if sprintEffective then
+			status.stamina = status.stamina - Config.SprintStaminaDrain * dt
+			drained = true
+			if status.stamina <= 0 then
+				status.stamina = 0
+				status.sprintLocked = true -- exhausted until SprintResumeStamina
+				sprintEffective = false
+				rejectClient(player, "Exhausted", { Ability = "Sprint" })
+			end
+		elseif status.sprintLocked and status.stamina >= Config.SprintResumeStamina then
+			status.sprintLocked = false
+		end
+		if sprintEffective ~= status.sprintEffective then
+			status.sprintEffective = sprintEffective
+			broadcastFeedback(sprintEffective and "SprintStart" or "SprintEnd", { Player = player })
+		end
+
+		-- Regen only when nothing drained this tick, after a short delay.
+		if drained then
+			status.lastSpendTime = nowv
 		elseif nowv - status.lastSpendTime >= Config.StaminaRegenDelay then
 			status.stamina = math.min(Config.StaminaMax,
 				status.stamina + Config.StaminaRegenPerSecond * dt)
@@ -609,7 +684,7 @@ local function tickOnce()
 			checkDashCollision(player, status)
 		end
 
-		-- Single speed authority (handles dash/stun expiry, block, carry).
+		-- Single speed authority (handles dash/stun expiry, block, sprint, carry).
 		recalcSpeed(player)
 	end
 end
@@ -651,6 +726,12 @@ function CombatService.Init()
 	RequestBlockEnd.OnServerEvent:Connect(function(player)
 		handleBlockEnd(player)
 	end)
+	RequestSprintStart.OnServerEvent:Connect(function(player)
+		handleSprintStart(player)
+	end)
+	RequestSprintEnd.OnServerEvent:Connect(function(player)
+		handleSprintEnd(player)
+	end)
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		bindPlayer(player)
@@ -661,7 +742,7 @@ function CombatService.Init()
 	end)
 
 	startTicker()
-	print("[CombatService] Initialized: attack/throw/block/dash + stamina live")
+	print("[CombatService] Initialized: attack/throw/block/dash/sprint + stamina live")
 end
 
 -- Read-only snapshots for other systems / the future GUI.
@@ -671,6 +752,10 @@ end
 
 function CombatService.IsBlocking(player)
 	return getStatus(player).blocking
+end
+
+function CombatService.IsSprinting(player)
+	return getStatus(player).sprintEffective
 end
 
 function CombatService.IsDashing(player)
@@ -692,6 +777,7 @@ function CombatService.DebugState()
 		if player.Parent then
 			local flags = {}
 			if status.blocking then table.insert(flags, "blocking") end
+			if status.sprintEffective then table.insert(flags, "sprinting") end
 			if now() < status.dashUntil then table.insert(flags, "dashing") end
 			if now() < status.iFramesUntil then table.insert(flags, "iframes") end
 			if now() < status.stunUntil then table.insert(flags, "stunned") end

@@ -24,6 +24,8 @@
 				"RequestDash": { "$className": "RemoteEvent" },
 				"RequestBlockStart": { "$className": "RemoteEvent" },
 				"RequestBlockEnd": { "$className": "RemoteEvent" },
+				"RequestSprintStart": { "$className": "RemoteEvent" },
+				"RequestSprintEnd": { "$className": "RemoteEvent" },
 				"EggPossessionChanged": { "$className": "RemoteEvent" },
 				"HoldTimeUpdated": { "$className": "RemoteEvent" },
 				"MatchStateChanged": { "$className": "RemoteEvent" },

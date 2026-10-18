@@ -25,7 +25,7 @@ local Config = {}
 -- Match flow
 --------------------------------------------------------------------------
 Config.MaxPlayers = 6            -- hard player cap for the arena
-Config.MinPlayersToStart = 1     -- TODO: raise once matchmaking exists (1 = solo testing)
+Config.MinPlayersToStart = 2     -- countdown starts at 2+ players (bots may fill in later)
 Config.RoundLength = 75          -- seconds per round
 Config.RoundsPerMatch = 3        -- best of 3
 Config.RoundsToWinMatch = 2      -- first to 2 round wins takes the match
@@ -69,6 +69,13 @@ Config.DashIFramesCarrying = 0
 Config.DashCollisionRadius = 4     -- studs between torsos that counts as a dash hit
 Config.DashCollisionKnockback = 12 -- horizontal push applied to the victim (studs/s)
 Config.DashCollisionUpward = 4
+
+--------------------------------------------------------------------------
+-- Sprint (hold to run faster -- the main stamina sink; default key Shift)
+--------------------------------------------------------------------------
+Config.SprintSpeedBonus = 6      -- added to base speed while sprinting (works while carrying too)
+Config.SprintStaminaDrain = 12   -- stamina drained per second while sprinting
+Config.SprintResumeStamina = 25  -- after exhaustion, sprinting re-enables at this stamina
 
 --------------------------------------------------------------------------
 -- Attack (punch -- enabled ONLY when NOT holding the egg; "HANDS FULL" otherwise)
@@ -144,9 +151,26 @@ Config.ArenaSpawnCount = 6
 Config.ArenaEggSpawnHeight = 3    -- Y of the Workspace.Arena.EggSpawnPoint marker
 
 --------------------------------------------------------------------------
+-- Animations (client-side polish, driven by FeedbackEvent kinds)
+--------------------------------------------------------------------------
+-- Upload animations via the Creator Dashboard and paste their
+-- "rbxassetid://..." URLs here. Empty string = disabled (skipped silently),
+-- so the game runs fine before any animation exists.
+Config.Animations = {
+	Dash = "",   -- one-shot, plays on "DashStart"
+	Attack = "", -- one-shot, plays on "PunchSwing"
+	Throw = "",  -- one-shot, plays on "EggThrown"
+	Block = "",  -- looped while blocking  ("BlockStart"/"BlockEnd")
+	Sprint = "", -- looped while sprinting ("SprintStart"/"SprintEnd")
+	Carry = "",  -- looped while holding the egg (HasEgg attribute)
+}
+
+--------------------------------------------------------------------------
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
 Config.DebugAllowCommandBar = true -- DebugCommand remote works in Studio only (never in production)
+Config.DebugQuickMatch = false    -- true: tiny rounds to test the full match flow quickly
+Config.DebugQuickMatchRoundLength = 15 -- round length (s) used when DebugQuickMatch is true
 
 return Config
