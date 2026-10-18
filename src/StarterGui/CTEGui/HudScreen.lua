@@ -176,12 +176,14 @@ function HudScreen.Create(parentGui)
 	UiKit.listLayout(self.feedFrame, Enum.FillDirection.Vertical, 0.012)
 
 	-------------------------------------------------------------------
-	-- Bottom left: stamina bar
+	-- Bottom center (above the ability buttons): stamina bar.
+	-- Kept OUT of the bottom-left corner on purpose: that is where the
+	-- native mobile thumbstick lives.
 	-------------------------------------------------------------------
 	self.staminaFrame = UiKit.frame({
 		Name = "StaminaBar",
-		Size = UDim2.fromScale(0.22, 0.032),
-		Position = UDim2.fromScale(0.03, 0.895),
+		Size = UDim2.fromScale(0.24, 0.032),
+		Position = UDim2.fromScale(0.38, 0.80),
 		BackgroundColor3 = UiKit.Theme.Disabled,
 	}, self.root)
 

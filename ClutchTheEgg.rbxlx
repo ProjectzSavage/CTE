@@ -523,6 +523,27 @@ Config.PrivateServers = {
 }
 
 --------------------------------------------------------------------------
+-- Camera (CameraController.client.lua -- layered on the native follow cam)
+--------------------------------------------------------------------------
+-- The stock Roblox Custom camera already follows smoothly and keeps full
+-- player control (mouse/touch look, zoom). CameraController only ADDS:
+-- a damped FOV zoom-out while carrying (+ sprint kick) and a subtle
+-- rotational shake on big hits (fed by VFXBridge.ScreenShake).
+Config.Camera = {
+	BaseFOV = 70,
+	CarryFOVBonus = 8,        -- slight zoom-out while carrying the egg
+	SprintFOVBonus = 3,       -- subtle speed feel while sprinting
+	FovLerpSpeed = 4,         -- FOV smoothing per second
+	ShakeDecay = 6,           -- shake fades at this rate per second
+	ShakeMaxDegrees = 2.5,    -- hard cap on shake angle (subtle, never sickening)
+	ShakePerPunchHit = 0.5,   -- intensities fed to ScreenShake
+	ShakePerDashFumble = 0.9,
+	ShakePerEggImpact = 0.7,
+	ShakePerEggOut = 0.4,
+	ShakeRadius = 40,         -- world events only shake within this many studs
+}
+
+--------------------------------------------------------------------------
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
@@ -534,103 +555,401 @@ return Config
 ]]></ProtectedString>
 </Properties>
 </Item>
+<Item class="StringValue" referent="RBX19">
+<Properties>
+	<string name="Name">GameREADME</string>
+	<string name="Value">============================================================
+CLUTCH THE EGG -- FINAL PROJECT README (Task 8)
+============================================================
+This text lives in ReplicatedStorage.Modules.GameREADME (StringValue) and is
+printed to the Output on server boot, followed by a LIVE dump of every
+Config value (so the config list can never go stale). Repo docs: README.md.
+
+6-player physics party brawler. Touch the egg to grab it; carrying accrues
+HOLD TIME. Best of 3 rounds x 75s. Round winner = most hold time. Match MVP
+= most total hold time. Egg out of arena -&gt; respawns at center after 3s
+(hold time pauses while loose). Bots fill empty slots (solo -&gt; 5 bots).
+
+------------------------------------------------------------
+1. SYSTEMS
+------------------------------------------------------------
+SERVER (ServerScriptService):
+  Main              bootstrap: ServerFeedback bindable, remote checks,
+                    service init order, cross-wiring, debug bridges,
+                    prints THIS readme + live Config dump
+  DataService       persistence (Clout, Fragments, ELO, pets, eggs, pity,
+                    lifetime hold, leaderstats). pcall+retries, 60s
+                    autosave, save-on-leave, BindToClose, temporary-profile
+                    fallback, Studio memory mode
+  EggService        spawn/auto-pickup/carry/hold-time ticker/fumble/hot
+                    throw/OOB respawn; gates via SetEnabled
+  CombatService     Attack/Throw/Block/Dash/Sprint + stamina; sole
+                    WalkSpeed authority; AttemptSteal (pet grip roll);
+                    anti-cheat rate limiting on every request
+  ScoringService    10Hz hold accumulation, round winners (ties shared),
+                    match totals, MVP, leaver ghosts; scores bots too
+  MatchService      Lobby -&gt; Countdown -&gt; 3x RoundPlaying -&gt; RoundEnd -&gt;
+                    MatchEnd loop; bot fill; private servers; late-joiner
+                    resync; fires RoundStart/RoundEnd/MatchEnd feedback
+  EconomyService    per-match Clout + fragments + pity (ServerFeedback
+                    listener); MatchRewards remote
+  HatcheryService   BuyEgg / ConvertFragments / OpenEgg / EquipPet (all
+                    server-validated); pet rolls; grip bonus; snapshots
+  BotService        code-built R6 rigs in Workspace.Bots + AI (seek egg,
+                    roam, sometimes throw, hunt, punch); beatable tuning
+  BotRegistry       dependency-free participant roster (players+bots),
+                    knock handler, match roster filter
+  MatchmakingService ELO queue: seed=longest waiter, widening window,
+                    post-match rank deltas saved to data
+  AntiCheatService  10Hz horizontal speed sampling -&gt; teleport back +
+                    strikes; remote spam limiter; 5 strikes -&gt; kick
+CLIENT:
+  StarterCharacterScripts.ClientInput   keybinds -&gt; Request* remotes;
+                                        _G.CTEInput API for GUI buttons
+  StarterCharacterScripts.Animations    FeedbackEvent-driven; IDs from
+                                        Config.Animations (empty = skipped)
+  StarterPlayerScripts.CameraController smooth native follow + damped FOV
+                                        (carry zoom-out, sprint kick) +
+                                        shake (_G.CTECamera.AddShake)
+  StarterPlayerScripts.VFXBridge        THE polish file: PlayPunchVFX /
+                                        PlayStealVFX / PlayCrackVFX /
+                                        ScreenShake stubs + event routing
+  StarterGui.CTEGui.GuiMain             builds + routes the code GUI
+                                        (hierarchies in section 8 if you
+                                        rebuild it manually)
+
+------------------------------------------------------------
+2. REMOTEEVENTS (ReplicatedStorage.Remotes) -- 17 total
+------------------------------------------------------------
+CLIENT -&gt; SERVER (all argument-free; server computes targets/directions):
+  RequestAttack / RequestThrow / RequestDash
+  RequestBlockStart / RequestBlockEnd
+  RequestSprintStart / RequestSprintEnd
+  HatcheryRequest (action, id?)   actions: &quot;BuyEgg&quot; | &quot;ConvertFragments&quot;
+                    | &quot;OpenEgg&quot; &lt;eggId&gt; | &quot;EquipPet&quot; &lt;petId&gt; | &quot;Refresh&quot;
+  DebugCommand (command, argument?)  Studio-gated. Commands: fumble
+                    [name] | respawn_egg | state | grantegg [&quot;rare&quot;] |
+                    clout [n] | frags [n] | hatchnow
+SERVER -&gt; CLIENT:
+  MatchStateChanged (stateName, data)
+    Lobby        {Players, MinPlayersToStart, MaxPlayers, BotsEnabled,
+                  PrivateServer, GraceSeconds}
+    Countdown    {StartsIn}            (0 = GO)
+    RoundPlaying {Round, RoundsPerMatch, RoundLength?, TimeLeft}  ~1Hz
+    RoundEnd     {Round, WinnerName?, NextRoundIn}
+    MatchEnd     {MVPNames, BestTotalHoldTime, NextLobbyIn}
+  RoundEnded (roundNumber, results)
+    results = {WinnerPlayer?, WinnerName?, Tied, TopTime, Entries}
+    Entries = {{Player, Name, UserId, RoundTime, MatchTime, RoundsWon,
+               IsWinner?}} sorted RoundTime desc (Player may be bot Model)
+  MatchEnded (final)
+    final = {Standings, MVPs, MVPNames, BestTotalHoldTime}
+    Standings = {{Player?, Name, UserId, TotalHoldTime, RoundsWon, Left,
+                 IsMVP?}} (Player nil = ghost leaver; bots have negative
+                 fake UserIds)
+  EggPossessionChanged (newCarrier?, previousCarrier?)  Player|bot Model
+  HoldTimeUpdated (entries)  {{Player, HoldTime}} sorted desc ~10Hz while
+                 carried (Player may be bot Model)
+  MatchRewards (rewards)  PERSONAL: {Rank, Clout, Fragments, NewClout,
+                 NewFragments, Knockdowns, Steals, HoldSeconds, RoundsWon,
+                 IsMVP, PityEgg, EggGranted, PityProgress}
+  HatcheryUpdated (snapshot)  PERSONAL: {Clout, Fragments, Elo,
+                 LifetimeHoldTime, MatchesPlayed, RoundWins, MVPs,
+                 PityProgress{SinceRoundWin,Needed},
+                 Eggs{{Id,Source,GuaranteedRare,UnlocksAt}},
+                 Pets{{Id,Name,Species,Rarity,Size,Mutation?,GripBonus,
+                 CreatedAt}}, EquippedPetId, StoreOK, Now}
+  FeedbackEvent (kind, data)  see section 3
+
+------------------------------------------------------------
+3. FeedbackEvent CATALOG (the VFX/SFX hook channel)
+------------------------------------------------------------
+WORLD (FireAllClients). Entity fields may be Players OR bot Models:
+  PunchSwing    {Player, Position}          swing succeeded
+  PunchHit      {Attacker, Victim, Position, Result}  Result: Hit|Blocked|IFramed
+  BlockedHit    {Attacker, Victim, Position}
+  IFrameDodge   {Attacker, Victim, Position}
+  EggStolen     {Attacker, Victim, Position}  punch knocked egg loose
+  GripSave      {Player, Attacker}            pet grip saved the steal
+  EggThrown     {Player, Direction, Position} Direction = unit Vector3
+  EggFumble     {Player, Reason, Position}    Reason: Attacked|DashCollision|
+                Died|CharacterRemoved|Left|RoundStart|RoundEnd|BotDespawned|
+                Manual|ForcedRespawn|DebugCommand
+  DashStart     {Player, Carrying}
+  DashFumble    {Player, Victim, Position}    carrier dashed into someone
+  EggImpact     {Player, Position}            hot thrown egg hit someone
+  EggPickup     {Player, Position}
+  EggOutOfBounds{Position}
+  EggRespawn    {Position}
+  BlockStart / BlockEnd / BlockBroken {Player}
+  SprintStart / SprintEnd {Player}
+  RoundStart    {Round, RoundsPerMatch, RoundLength}   NEW in Task 8
+  RoundEnd      {Round, WinnerName?, WinnerPlayer?, Tied, TopTime,
+                 NextRoundIn}                          NEW in Task 8
+  MatchEnd      {MVPNames, MVPs, BestTotalHoldTime, NextLobbyIn} NEW Task 8
+PERSONAL (FireClient to involved player only):
+  PetHatched    {Pet}                       you opened an egg
+  EggGranted    {Egg}                       you received an egg (pity/debug)
+  HandsFull / NotCarrying / NoStamina / OnCooldown / Stunned / PunchWhiff
+                {Ability}
+  Exhausted     {Ability}
+  GripSave      {Ability=&quot;Grip&quot;, ByPet=true}   (personal echo)
+  NotEnoughClout / NotEnoughFragments {Need, Have}
+  EggNotReady   {ReadyAt}
+  DataNotReady  {}
+SERVER-SIDE mirror: every Egg/Combat feedback kind also fires
+ServerScriptService.ServerFeedback (BindableEvent) for EconomyService.
+
+REPLICATED PLAYER ATTRIBUTES: HasEgg (bool), Stamina (int ~20Hz).
+Bot models carry HasEgg + IsBot attributes too.
+
+------------------------------------------------------------
+4. CONFIG VALUES (snapshot -- boot log prints the LIVE dump)
+------------------------------------------------------------
+Match:      MaxPlayers=6 MinPlayersToStart=2 RoundLength=75 RoundsPerMatch=3
+            RoundsToWinMatch=2(reserved) RoundStartCountdown=3
+            RoundEndFreeze=4 IntermissionLength=8 HoldTimeSyncInterval=0.1
+Movement:   WalkSpeed=16 CarrySpeed=12 JumpPower=50
+Dash:       SpeedBonus=24 Duration=0.25 Cooldown=2.5 StaminaCost=25 IFrames=0.2
+            Carrying: 16/0.15/2.5/30/0; CollisionRadius=4 Knockback=12
+            Upward=4 EggDropOnDashCollision=true
+Sprint:     SpeedBonus=6 StaminaDrain=12/s ResumeStamina=25
+Attack:     Range=5 Knockback=25 Upward=8 Cooldown=0.6 StaminaCost=10
+            Hitstun=0.25 FacingDot=0
+Throw:      Speed=60 UpwardBias=12 SelfPickupDelay=0.8; hot egg:
+            DangerTime=0.8 ImpactMinSpeed=18 ImpactKnockback=14 Upward=6
+            Stun=0.15 ImpactPickupDelay=0.5
+Block:      KnockbackReduction=0.6 SpeedMultiplier=0.5 StaminaDrain=15/s
+Stamina:    Max=100 Regen=20/s Delay=0.75
+Egg:        Radius=1 CarryOffsetUp=0.75 Forward=1.5 RespawnDelay=3
+            KnockLooseSpeed=20 Upward=10 ProximityPickupRadius=3
+            OutOfBoundsY=-40 Horizontal=70 LooseResetRadius=8 FumblePop=4
+Arena:      Floor=128 Play=120 WallHeight=5 WallThickness=2 SpawnRadius=48
+            SpawnCount=6 EggSpawnHeight=3
+Data:       StoreName=CTE_PlayerData_v1 AutoSave=60s LoadRetries=3
+            SaveRetries=2 RetryDelay=2s UseRealStoreInStudio=false
+Economy:    StartingClout=150 Participation=25 PerHoldSecond=1
+            PerKnockdown=5 PerSteal=8 PerRoundWin=30 MVPBonus=100
+            Caps: 40 kd/40 steals; FragmentsByRank={5,4,3,2,2,1}
+            EggCloutCost=250 EggFragmentCost=10 HatchTime=45s
+            PityMatchesWithoutRoundWin=10
+Pets:       RarityWeights Common60/Rare25/Epic10/Legendary4/Mythic1;
+            RareGuaranteed Rare70/Epic20/Legendary8/Mythic2; 6 species;
+            Sizes Small..Giant; MutationChance=0.1 (5 mutations);
+            GripByRarity 0.5/1/1.5/2/3 (MaxGripBonus=3) MaxEquipped=1
+Bots:       Enabled=true FillToMaxPlayers=true MaxBots=5 LobbyGrace=8s
+            TickRate=5 WalkSpeed=14 CarrySpeed=11 ReactionTime=0.35
+            AttackRange=6 AttackCooldown=1.1 PunchKnockback=20 Upward=6
+            Aggression=0.55 ThrowChance=0.25 ThrowRange=25
+            RoamRetarget=3s StunTime=0.4 RespawnY=-30 Elo=900
+            Names: Rex/Kev/Ziggy/Nova/Bolt/Mochi/Turbo/Pixel
+Matchmaking: DefaultElo=1000 Min100 Max3000 BaseRange=150 MaxRange=1000
+            WidenPerSecond=25 MaxWait=20s EloByRank={25,12,4,-4,-12,-20}
+AntiCheat:  Enabled=true SampleRate=10 SpeedTolerance=10
+            ConsecutiveSamples=3 MaxStrikes=5 SpawnGrace=2s
+            MaxAbilityRequestsPerSecond=15 LogViolations=true
+PrivateServers: Enabled=true MinPlayersToStart=1 BotGrace=3s
+Camera:     BaseFOV=70 CarryFOVBonus=8 SprintFOVBonus=3 FovLerpSpeed=4
+            ShakeDecay=6 ShakeMaxDegrees=2.5 ShakePerPunchHit=0.5
+            ShakePerDashFumble=0.9 ShakePerEggImpact=0.7 ShakePerEggOut=0.4
+            ShakeRadius=40
+Animations: Dash/Attack/Throw/Block/Sprint/Carry all &quot;&quot; (paste uploaded
+            rbxassetid URLs; empty = skipped silently)
+Debug:      VerboseLogging=true AllowCommandBar=true QuickMatch=false
+            QuickMatchRoundLength=15
+
+------------------------------------------------------------
+5. MOBILE SCHEME
+------------------------------------------------------------
+  * Movement: NATIVE left thumbstick (Roblox default touch controls; no
+    script touches it). Bottom-left HUD corner intentionally kept clear.
+  * Abilities: the 4 HUD buttons (ATTACK/THROW/BLOCK-hold/DASH) call
+    _G.CTEInput -- same contextual rules as keyboard; server enforces.
+  * CAS touch buttons DISABLED (no duplicates). Sprint = keyboard/gamepad
+    only (spec's 4-button layout).
+  * All GUI is Scale-based + TextScaled; ScreenInsets=DeviceSafeArea.
+  * A mobile player can fully win MVP: buttons steal/throw/dash, thumbstick
+    navigates; hold time accrues identically.
+
+------------------------------------------------------------
+6. CAMERA
+------------------------------------------------------------
+Native Custom camera (smooth follow + full look/zoom control) is kept.
+CameraController adds ONLY: damped FOV zoom-out while carrying (+8),
+sprint kick (+3), and subtle rotational shake on big hits (VFXBridge -&gt;
+_G.CTECamera.AddShake). Tunables: Config.Camera.
+
+------------------------------------------------------------
+7. KNOWN PLACEHOLDERS / POLISH AREAS
+------------------------------------------------------------
+  [ ] VFXBridge stubs: PlayPunchVFX / PlayStealVFX / PlayCrackVFX /
+      ScreenShake (+ OnOtherEvent catch-all) -- THE file to fill in.
+  [ ] Config.Animations: all six slots empty (upload + paste IDs).
+  [ ] Bots slide (no animation rig scripts); egg is a neon ball (no mesh);
+      arena is grey slabs (art pass).
+  [ ] Settings: sensitivity stepper is a placeholder (_G.CTESettings);
+      mute is real (SoundService.Volume).
+  [ ] 2v2v2 team mode: not implemented (FFA only).
+  [ ] Pet trading: not implemented (MaxEquipped=1 reserved).
+  [ ] GUI is code-built by GuiMain+UiKit; if you rebuild it manually, use
+      the hierarchies in section 8 and keep ResetOnSpawn=false.
+  [ ] DataStore: Studio runs memory-only (UseRealStoreInStudio=false).
+      Production: publish game + enable API access; consider ProfileService
+      session locking before multi-server scaling.
+  [ ] AntiCheat: horizontal speed only (vertical fly detection future);
+      kicks at 5 strikes; ranges are server-computed by design.
+
+------------------------------------------------------------
+8. GUI HIERARCHY (what GuiMain builds at runtime -- for manual rebuilds)
+------------------------------------------------------------
+StarterGui
+  CTEGui (ScreenGui)  ResetOnSpawn=false, ScreenInsets=DeviceSafeArea
+    GuiMain (LocalScript)          -- routes remotes -&gt; screens below
+    UiKit (ModuleScript)           -- Theme table + Scale-only builders
+    ControlsPanel (ModuleScript)
+    HudScreen (ModuleScript)
+    HatcheryPanel (ModuleScript)
+    ResultsScreens (ModuleScript)
+    SettingsPanel (ModuleScript)
+Runtime tree produced inside CTEGui (all UDim2.fromScale, TextScaled):
+  HUD (Frame, transparent, full-screen)
+    RoundTimer (TextLabel .38,.012 .24x.085, gold, GothamBlack &quot;--&quot;/seconds)
+    RoundIndicator (TextLabel .38,.10 .24x.035 dim &quot;Round 1/3&quot;)
+    Status (TextLabel .34,.138 .32x.035 dim lobby status line)
+    Countdown (TextLabel .2,.30 .6x.22 gold hidden &quot;3..2..1..GO!&quot;)
+    HoldTimeBoard (Frame .015,.145 .31x.385, translucent)
+      Header (TextLabel &quot;HOLD TIME&quot;)
+      Row1..Row6 (Frame .96 x ~.123 each)
+        Fill (Frame width=hold/max, dark gold)
+        PlayerName (TextLabel left, &quot;(you)&quot; suffix, gold bg when carrier)
+        HoldTime (TextLabel right &quot;%.1fs&quot;)
+    Feed (Frame .015,.55 .31x.20 + UIListLayout; max 4 fading labels)
+    StaminaBar (Frame .38,.80 .24x.032; Fill + &quot;STAMINA n&quot; label; red&lt;25%)
+    Abilities (Frame .26,.845 .48x.14, transparent)
+      ATTACK / THROW / BLOCK / DASH (TextButton .235x.92 each)
+        Title (TextLabel), StateLabel (&quot;Hands Full&quot;/&quot;Need Egg&quot;/&quot;No Stamina&quot;)
+        Cooldown (Frame black .45 alpha, top-down shrink tween)
+    SettingsButton &quot;SET&quot; (TextButton .905,.025 .075x.055)
+    HatcheryButton &quot;HATCHERY&quot; (TextButton .805,.025 .09x.055)
+  RoundEndPanel + RoundEndPanelScrim (Frame .19,.19 .62x.62 + full scrim)
+    Title &quot;ROUND n&quot; / Winner line / Row0 header / Row1..6
+      (cols: # | PLAYER | ROUND | MATCH | WON; winner row gold)
+  MatchEndPanel + MatchEndPanelScrim (Frame .17,.11 .66x.78 + scrim)
+    Title &quot;MATCH OVER&quot; / MVP banner (gold star) / Row0 header / Row1..6
+      (cols: # | PLAYER | TOTAL HOLD | WON | star/left tag)
+    PlayAgain + BackToLobby (TextButtons .36x.085)
+  SettingsScrim + SettingsPanel (Frame .28,.27 .44x.46)
+    Title / Close &quot;X&quot; / Sound label + MuteToggle / Sensitivity label +
+    SensDown &quot;-&quot; + SensValue + SensUp &quot;+&quot; / placeholder note
+  HatcheryScrim + HatcheryPanel (Frame .21,.13 .58x.74)
+    Title / Close / Wallet label (Clout, Fragments, Pity n/10)
+    BuyEgg + ConvertFragments buttons / &quot;EGGS&quot; header + Eggs
+    (ScrollingFrame: rows w/ timer or OPEN) / &quot;PETS (n)&quot; header + Pets
+    (ScrollingFrame: rarity-colored rows w/ grip% + EQUIP/ON) / Note
+  ControlsPanel (Frame right edge .30, .235 wide, collapsible)
+    Header button &quot;CONTROLS -/+&quot; / Body: 6 key+action rows / footer
+  Toasts (Frame .25,.18 .5x.16 + UIListLayout; fading info toasts)
+============================================================
+</string>
+</Properties>
 </Item>
-<Item class="Folder" referent="RBX19">
+</Item>
+<Item class="Folder" referent="RBX20">
 <Properties>
 	<string name="Name">Remotes</string>
 </Properties>
-<Item class="RemoteEvent" referent="RBX20">
+<Item class="RemoteEvent" referent="RBX21">
 <Properties>
 	<string name="Name">RequestAttack</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX21">
+<Item class="RemoteEvent" referent="RBX22">
 <Properties>
 	<string name="Name">RequestThrow</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX22">
+<Item class="RemoteEvent" referent="RBX23">
 <Properties>
 	<string name="Name">RequestDash</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX23">
+<Item class="RemoteEvent" referent="RBX24">
 <Properties>
 	<string name="Name">RequestBlockStart</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX24">
+<Item class="RemoteEvent" referent="RBX25">
 <Properties>
 	<string name="Name">RequestBlockEnd</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX25">
+<Item class="RemoteEvent" referent="RBX26">
 <Properties>
 	<string name="Name">RequestSprintStart</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX26">
+<Item class="RemoteEvent" referent="RBX27">
 <Properties>
 	<string name="Name">RequestSprintEnd</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX27">
+<Item class="RemoteEvent" referent="RBX28">
 <Properties>
 	<string name="Name">EggPossessionChanged</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX28">
+<Item class="RemoteEvent" referent="RBX29">
 <Properties>
 	<string name="Name">HoldTimeUpdated</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX29">
+<Item class="RemoteEvent" referent="RBX30">
 <Properties>
 	<string name="Name">MatchStateChanged</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX30">
+<Item class="RemoteEvent" referent="RBX31">
 <Properties>
 	<string name="Name">RoundEnded</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX31">
+<Item class="RemoteEvent" referent="RBX32">
 <Properties>
 	<string name="Name">MatchEnded</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX32">
+<Item class="RemoteEvent" referent="RBX33">
 <Properties>
 	<string name="Name">FeedbackEvent</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX33">
+<Item class="RemoteEvent" referent="RBX34">
 <Properties>
 	<string name="Name">MatchRewards</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX34">
+<Item class="RemoteEvent" referent="RBX35">
 <Properties>
 	<string name="Name">HatcheryRequest</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX35">
+<Item class="RemoteEvent" referent="RBX36">
 <Properties>
 	<string name="Name">HatcheryUpdated</string>
 </Properties>
 </Item>
-<Item class="RemoteEvent" referent="RBX36">
+<Item class="RemoteEvent" referent="RBX37">
 <Properties>
 	<string name="Name">DebugCommand</string>
 </Properties>
 </Item>
 </Item>
 </Item>
-<Item class="ServerScriptService" referent="RBX37">
+<Item class="ServerScriptService" referent="RBX38">
 <Properties>
 	<string name="Name">ServerScriptService</string>
 </Properties>
-<Item class="ModuleScript" referent="RBX38">
+<Item class="ModuleScript" referent="RBX39">
 <Properties>
 	<string name="Name">AntiCheatService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -898,7 +1217,7 @@ return AntiCheatService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX39">
+<Item class="ModuleScript" referent="RBX40">
 <Properties>
 	<string name="Name">BotRegistry</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1048,7 +1367,7 @@ return BotRegistry
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX40">
+<Item class="ModuleScript" referent="RBX41">
 <Properties>
 	<string name="Name">BotService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1537,7 +1856,7 @@ return BotService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX41">
+<Item class="ModuleScript" referent="RBX42">
 <Properties>
 	<string name="Name">CombatService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -2437,7 +2756,7 @@ return CombatService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX42">
+<Item class="ModuleScript" referent="RBX43">
 <Properties>
 	<string name="Name">DataService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -2859,7 +3178,7 @@ return DataService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX43">
+<Item class="ModuleScript" referent="RBX44">
 <Properties>
 	<string name="Name">EconomyService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -3085,7 +3404,7 @@ return EconomyService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX44">
+<Item class="ModuleScript" referent="RBX45">
 <Properties>
 	<string name="Name">EggService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -3898,7 +4217,7 @@ return EggService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX45">
+<Item class="ModuleScript" referent="RBX46">
 <Properties>
 	<string name="Name">HatcheryService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -4219,7 +4538,7 @@ return HatcheryService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="Script" referent="RBX46">
+<Item class="Script" referent="RBX47">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">Main</string>
@@ -4412,12 +4731,48 @@ debugCommands.Event:Connect(function(command, argument)
 	runDebugCommand(command, argument, nil)
 end)
 
+-- 6) Final project README + LIVE Config dump (Task 8 deliverable: readable
+--    in the Output on every boot; the static text lives in
+--    ReplicatedStorage.Modules.GameREADME, the dump can never go stale).
+local function dumpConfigValues(tbl, prefix)
+	local keys = {}
+	for key in pairs(tbl) do
+		table.insert(keys, key)
+	end
+	table.sort(keys, function(a, b)
+		return tostring(a) < tostring(b)
+	end)
+	for _, key in ipairs(keys) do
+		local value = tbl[key]
+		local path = (prefix == "") and tostring(key) or (prefix .. "." .. tostring(key))
+		if type(value) == "table" then
+			dumpConfigValues(value, path)
+		else
+			print(("[Config] %s = %s"):format(path, tostring(value)))
+		end
+	end
+end
+
+local modulesFolder = ReplicatedStorage:WaitForChild("Modules")
+local gameReadme = modulesFolder:FindFirstChild("GameREADME")
+if gameReadme and gameReadme:IsA("StringValue") then
+	print("================= CLUTCH THE EGG -- PROJECT README =================")
+	for line in (gameReadme.Value .. "\n"):gmatch("([^\n]*)\n") do
+		print(line)
+	end
+	print("================= LIVE CONFIG DUMP (all values) =================")
+	dumpConfigValues(Config, "")
+	print("================= END README / CONFIG DUMP =================")
+else
+	warn("[Main] ReplicatedStorage.Modules.GameREADME (StringValue) missing")
+end
+
 print("[Clutch the Egg] Server bootstrap complete -- match + bots + economy + "
-	.. "hatchery + matchmaking + anti-cheat live (Tasks 6-7)")
+	.. "hatchery + matchmaking + anti-cheat + VFX/camera hooks live (Task 8)")
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX47">
+<Item class="ModuleScript" referent="RBX48">
 <Properties>
 	<string name="Name">MatchmakingService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -4582,7 +4937,7 @@ return MatchmakingService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX48">
+<Item class="ModuleScript" referent="RBX49">
 <Properties>
 	<string name="Name">MatchService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -4648,6 +5003,14 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
 local RoundEnded = Remotes:WaitForChild("RoundEnded")
 local MatchEnded = Remotes:WaitForChild("MatchEnded")
+local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
+
+-- Flow events for the polish layer (VFXBridge listens to FeedbackEvent only,
+-- so round/match moments are mirrored here as world feedback kinds:
+-- "RoundStart", "RoundEnd", "MatchEnd").
+local function broadcastFeedback(kind, data)
+	FeedbackEvent:FireAllClients(kind, data or {})
+end
 
 local MatchService = {}
 
@@ -4806,6 +5169,11 @@ local function playRound(roundNumber)
 		RoundLength = length,
 		TimeLeft = length,
 	})
+	broadcastFeedback("RoundStart", {
+		Round = roundNumber,
+		RoundsPerMatch = Config.RoundsPerMatch,
+		RoundLength = length,
+	})
 	print(("[Match] --- Round %d/%d started (%ds) ---"):format(
 		roundNumber, Config.RoundsPerMatch, length))
 
@@ -4855,6 +5223,14 @@ local function playRound(roundNumber)
 	setState("RoundEnd", {
 		Round = roundNumber,
 		WinnerName = results.WinnerName,
+		NextRoundIn = Config.RoundEndFreeze,
+	})
+	broadcastFeedback("RoundEnd", {
+		Round = roundNumber,
+		WinnerName = results.WinnerName,
+		WinnerPlayer = results.WinnerPlayer,
+		Tied = results.Tied,
+		TopTime = results.TopTime,
 		NextRoundIn = Config.RoundEndFreeze,
 	})
 	roundDeadline = nil
@@ -4931,6 +5307,12 @@ local function playMatch()
 		BestTotalHoldTime = final.BestTotalHoldTime,
 		NextLobbyIn = Config.IntermissionLength,
 	})
+	broadcastFeedback("MatchEnd", {
+		MVPNames = final.MVPNames,
+		MVPs = final.MVPs,
+		BestTotalHoldTime = final.BestTotalHoldTime,
+		NextLobbyIn = Config.IntermissionLength,
+	})
 	task.wait(Config.IntermissionLength)
 
 	-- Cleanup: bots leave, roster filter off (everyone is lobby-eligible).
@@ -4990,7 +5372,7 @@ return MatchService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX49">
+<Item class="ModuleScript" referent="RBX50">
 <Properties>
 	<string name="Name">ScoringService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -5291,26 +5673,26 @@ return ScoringService
 </Properties>
 </Item>
 </Item>
-<Item class="ServerStorage" referent="RBX50">
+<Item class="ServerStorage" referent="RBX51">
 <Properties>
 	<string name="Name">ServerStorage</string>
 </Properties>
 </Item>
-<Item class="SoundService" referent="RBX51">
+<Item class="SoundService" referent="RBX52">
 <Properties>
 	<string name="Name">Sound</string>
 </Properties>
 </Item>
-<Item class="StarterGui" referent="RBX52">
+<Item class="StarterGui" referent="RBX53">
 <Properties>
 	<string name="Name">StarterGui</string>
 </Properties>
-<Item class="ScreenGui" referent="RBX53">
+<Item class="ScreenGui" referent="RBX54">
 <Properties>
 	<string name="Name">CTEGui</string>
 	<bool name="ResetOnSpawn">false</bool>
 </Properties>
-<Item class="ModuleScript" referent="RBX54">
+<Item class="ModuleScript" referent="RBX55">
 <Properties>
 	<string name="Name">ControlsPanel</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -5437,7 +5819,7 @@ return ControlsPanel
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="LocalScript" referent="RBX55">
+<Item class="LocalScript" referent="RBX56">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">GuiMain</string>
@@ -5796,7 +6178,7 @@ end)
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX56">
+<Item class="ModuleScript" referent="RBX57">
 <Properties>
 	<string name="Name">HatcheryPanel</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -6172,7 +6554,7 @@ return HatcheryPanel
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX57">
+<Item class="ModuleScript" referent="RBX58">
 <Properties>
 	<string name="Name">HudScreen</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -6353,12 +6735,14 @@ function HudScreen.Create(parentGui)
 	UiKit.listLayout(self.feedFrame, Enum.FillDirection.Vertical, 0.012)
 
 	-------------------------------------------------------------------
-	-- Bottom left: stamina bar
+	-- Bottom center (above the ability buttons): stamina bar.
+	-- Kept OUT of the bottom-left corner on purpose: that is where the
+	-- native mobile thumbstick lives.
 	-------------------------------------------------------------------
 	self.staminaFrame = UiKit.frame({
 		Name = "StaminaBar",
-		Size = UDim2.fromScale(0.22, 0.032),
-		Position = UDim2.fromScale(0.03, 0.895),
+		Size = UDim2.fromScale(0.24, 0.032),
+		Position = UDim2.fromScale(0.38, 0.80),
 		BackgroundColor3 = UiKit.Theme.Disabled,
 	}, self.root)
 
@@ -6769,7 +7153,7 @@ return HudScreen
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX58">
+<Item class="ModuleScript" referent="RBX59">
 <Properties>
 	<string name="Name">ResultsScreens</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -7088,7 +7472,7 @@ return ResultsScreens
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX59">
+<Item class="ModuleScript" referent="RBX60">
 <Properties>
 	<string name="Name">SettingsPanel</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -7260,7 +7644,7 @@ return SettingsPanel
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX60">
+<Item class="ModuleScript" referent="RBX61">
 <Properties>
 	<string name="Name">UiKit</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -7461,20 +7845,20 @@ return UiKit
 </Item>
 </Item>
 </Item>
-<Item class="StarterPack" referent="RBX61">
+<Item class="StarterPack" referent="RBX62">
 <Properties>
 	<string name="Name">StarterPack</string>
 </Properties>
 </Item>
-<Item class="StarterPlayer" referent="RBX62">
+<Item class="StarterPlayer" referent="RBX63">
 <Properties>
 	<string name="Name">StarterPlayer</string>
 </Properties>
-<Item class="StarterCharacterScripts" referent="RBX63">
+<Item class="StarterCharacterScripts" referent="RBX64">
 <Properties>
 	<string name="Name">StarterCharacterScripts</string>
 </Properties>
-<Item class="LocalScript" referent="RBX64">
+<Item class="LocalScript" referent="RBX65">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">Animations</string>
@@ -7600,7 +7984,7 @@ updateCarryLoop()
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="LocalScript" referent="RBX65">
+<Item class="LocalScript" referent="RBX66">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">ClientInput</string>
@@ -7623,12 +8007,17 @@ updateCarryLoop()
 	  Dash   : E, Gamepad R1                 (Space is pure jump again)
 	  Sprint : Left Shift (hold), Gamepad R2 -- drains stamina while held
 
-	Mobile: ContextActionService touch buttons are created for all five
-	abilities as a functional placeholder. The real mobile GUI comes in a
-	later prompt and should call the exposed functions below.
+	Mobile scheme (final): the NATIVE left thumbstick handles movement
+	(Roblox's default TouchMovementMode -- this script never touches it),
+	and the four HUD buttons in StarterGui.CTEGui (ATTACK / THROW / BLOCK /
+	DASH) call the _G.CTEInput API below with the same contextual rules
+	(the server enforces context, cooldowns and stamina regardless).
+	ContextActionService touch buttons are DISABLED (createTouchButton =
+	false) so no duplicate default buttons appear. Sprint is intentionally
+	keyboard/gamepad-only on the spec's 4-button layout.
 
-	GUI hook (later prompt): the API is exposed on _G for other client
-	scripts (ScreenGui buttons live in a different LocalScript):
+	GUI hook: the API is exposed on _G for GUI scripts (buttons live in the
+	CTEGui screen, or in your hand-built replacement):
 	  _G.CTEInput.Attack()
 	  _G.CTEInput.Throw()
 	  _G.CTEInput.Dash()
@@ -7637,8 +8026,8 @@ updateCarryLoop()
 	  _G.CTEInput.Sprint(true)   -- press
 	  _G.CTEInput.Sprint(false)  -- release
 
-	TODO(gui): when real buttons exist, consider sinking MouseButton1 here or
-	unbinding it so clicks on the HUD do not also punch.
+	Note: GUI TextButtons sink input, so clicking HUD buttons does NOT also
+	trigger the MouseButton1 attack binding.
 ]]
 
 local Players = game:GetService("Players")
@@ -7762,18 +8151,19 @@ local function holdAction(setter)
 	end
 end
 
--- createTouchButton = true gives free (ugly) on-screen buttons on mobile
--- until the real GUI is wired up. Rebinding the same names on respawn
--- replaces the previous character's bindings.
-ContextActionService:BindAction("CTE_Attack", attackAction, true,
+-- createTouchButton = false: mobile uses the native left thumbstick plus the
+-- four HUD buttons in CTEGui (which call the _G.CTEInput API above), so CAS
+-- must NOT spawn its own duplicate on-screen buttons. Rebinding the same
+-- names on respawn replaces the previous character's bindings.
+ContextActionService:BindAction("CTE_Attack", attackAction, false,
 	Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonX)
-ContextActionService:BindAction("CTE_Throw", throwAction, true,
+ContextActionService:BindAction("CTE_Throw", throwAction, false,
 	Enum.KeyCode.Q, Enum.KeyCode.F, Enum.KeyCode.ButtonY)
-ContextActionService:BindAction("CTE_Block", holdAction(setBlocking), true,
+ContextActionService:BindAction("CTE_Block", holdAction(setBlocking), false,
 	Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL1)
-ContextActionService:BindAction("CTE_Dash", dashAction, true,
+ContextActionService:BindAction("CTE_Dash", dashAction, false,
 	Enum.KeyCode.E, Enum.KeyCode.ButtonR1)
-ContextActionService:BindAction("CTE_Sprint", holdAction(setSprinting), true,
+ContextActionService:BindAction("CTE_Sprint", holdAction(setSprinting), false,
 	Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR2)
 
 ---------------------------------------------------------------------------
@@ -7800,10 +8190,408 @@ end)
 </Properties>
 </Item>
 </Item>
-<Item class="StarterPlayerScripts" referent="RBX66">
+<Item class="StarterPlayerScripts" referent="RBX67">
 <Properties>
 	<string name="Name">StarterPlayerScripts</string>
 </Properties>
+<Item class="LocalScript" referent="RBX68">
+<Properties>
+	<bool name="Disabled">false</bool>
+	<string name="Name">CameraController</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	CameraController (StarterPlayer.StarterPlayerScripts.CameraController)
+	======================================================================
+	Camera polish layer. The stock Roblox Custom camera ALREADY provides the
+	smooth follow + full player look/zoom control, so this script never
+	fights it -- it only ADDS two damped effects on top:
+
+	  1. FOV dynamics: slight zoom-OUT while carrying the egg
+	     (+Config.Camera.CarryFOVBonus), a subtle sprint kick
+	     (+SprintFOVBonus), all lerped at FovLerpSpeed so nothing snaps.
+	  2. Screen shake: small decaying ROTATIONAL offsets applied right
+	     after the default camera update (RenderPriority.Camera + 1), fed
+	     by VFXBridge.ScreenShake -> _G.CTECamera.AddShake(intensity).
+	     Capped at Config.Camera.ShakeMaxDegrees (subtle, never sickening).
+
+	Everything is tunable in Config.Camera. Public API for other client
+	scripts (VFXBridge):
+	  _G.CTECamera.AddShake(intensity)
+	  _G.CTECamera.GetShake()      -- current magnitude (debug)
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local FeedbackEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("FeedbackEvent")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+local CamCfg = Config.Camera
+
+local shakeMagnitude = 0
+local sprinting = false
+
+---------------------------------------------------------------------------
+-- Public API (consumed by VFXBridge.ScreenShake)
+---------------------------------------------------------------------------
+
+_G.CTECamera = {
+	AddShake = function(intensity)
+		intensity = tonumber(intensity) or 0
+		if intensity <= 0 then
+			return
+		end
+		shakeMagnitude = math.min(1.5, shakeMagnitude + intensity)
+	end,
+	GetShake = function()
+		return shakeMagnitude
+	end,
+}
+
+---------------------------------------------------------------------------
+-- State sources: carry = HasEgg attribute, sprint = server SprintStart/End
+---------------------------------------------------------------------------
+
+local function isCarrying()
+	return player:GetAttribute("HasEgg") == true
+end
+
+FeedbackEvent.OnClientEvent:Connect(function(kind, data)
+	if type(data) ~= "table" or data.Player ~= player then
+		return
+	end
+	if kind == "SprintStart" then
+		sprinting = true
+	elseif kind == "SprintEnd" or kind == "BlockBroken" or kind == "Exhausted" then
+		sprinting = false
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Per-frame layer: runs AFTER the default camera update
+---------------------------------------------------------------------------
+
+local function targetFOV()
+	local fov = CamCfg.BaseFOV
+	if isCarrying() then
+		fov = fov + CamCfg.CarryFOVBonus -- zoom out a touch: see threats coming
+	end
+	if sprinting and not isCarrying() then
+		fov = fov + CamCfg.SprintFOVBonus
+	end
+	return fov
+end
+
+RunService:BindToRenderState("CTECamera", Enum.RenderPriority.Camera.Value + 1, function(dt)
+	-- 1) Smooth FOV (damped lerp; frame-rate independent).
+	local current = camera.FieldOfView
+	local goal = targetFOV()
+	local alpha = 1 - math.exp(-CamCfg.FovLerpSpeed * dt)
+	local next = current + (goal - current) * alpha
+	if math.abs(next - current) > 0.01 then
+		camera.FieldOfView = next
+	end
+
+	-- 2) Shake: decaying random rotational kick on top of whatever the
+	--    default camera produced this frame (never touches position, so
+	--    movement/look control is unaffected).
+	if shakeMagnitude > 0.001 then
+		local degrees = math.min(shakeMagnitude, 1.5) * CamCfg.ShakeMaxDegrees
+		local radians = math.rad(degrees)
+		camera.CFrame = camera.CFrame * CFrame.Angles(
+			(math.random() * 2 - 1) * radians,
+			(math.random() * 2 - 1) * radians,
+			(math.random() * 2 - 1) * radians * 0.5
+		)
+		shakeMagnitude = shakeMagnitude * math.exp(-CamCfg.ShakeDecay * dt)
+		if shakeMagnitude <= 0.001 then
+			shakeMagnitude = 0
+		end
+	end
+end)
+
+if Config.DebugVerboseLogging then
+	print("[CameraController] Live: carry zoom-out + sprint kick + shake hook (_G.CTECamera.AddShake)")
+end
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="LocalScript" referent="RBX69">
+<Properties>
+	<bool name="Disabled">false</bool>
+	<string name="Name">VFXBridge</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	VFXBridge (StarterPlayer.StarterPlayerScripts.VFXBridge)
+	========================================================
+	THE ONE FILE FOR THE ART/VFX POLISH PASS. Everything below the routing
+	section is a STUB: fill the four functions (PlayPunchVFX, PlayStealVFX,
+	PlayCrackVFX, ScreenShake) with particles/beams/sounds/screenspace juice
+	and every combat moment lights up -- no other file needs editing.
+
+	Server combat/gameplay code fires FeedbackEvents; this bridge is the
+	single client subscriber that routes them into the stubs. Events arrive
+	for ALL participants, so `params.InvolvesLocalPlayer` tells you whether
+	the local player is the actor/victim (useful for first-person-only FX),
+	and world positions are included for distance checks.
+
+	Bots: entities can be Players OR bot Models. params.*Character is the
+	resolved character Model either way (safe to attach emitters to).
+
+	CONFIRMED EVENT PAYLOADS (FeedbackEvent kind -> data)
+	-----------------------------------------------------
+	World (FireAllClients -- everyone receives):
+	  PunchSwing   { Player, Position }                       -- swing started (success only)
+	  PunchHit     { Attacker, Victim, Position, Result }     -- Result: "Hit" | "Blocked" | "IFramed"
+	  BlockedHit   { Attacker, Victim, Position }             -- victim was blocking
+	  IFrameDodge  { Attacker, Victim, Position }             -- victim dash-i-framed it
+	  EggStolen    { Attacker, Victim, Position }             -- punch knocked the egg loose
+	  GripSave     { Player, Victim? no -- Player = saver, Attacker }  -- pet grip saved the steal
+	  EggThrown    { Player, Direction, Position }            -- Direction = unit Vector3
+	  EggFumble    { Player, Reason, Position }               -- Reason: "Attacked" | "DashCollision"
+	                                                        --   | "Died" | "CharacterRemoved" | "Left"
+	                                                        --   | "RoundStart" | "RoundEnd" | "BotDespawned"
+	                                                        --   | "Manual" | "DebugCommand"
+	  DashFumble   { Player, Victim, Position }               -- carrier dashed into someone
+	  DashStart    { Player, Carrying }
+	  EggImpact    { Player, Position }                       -- hot thrown egg beaned someone
+	  EggPickup    { Player, Position }
+	  EggOutOfBounds { Position }
+	  EggRespawn   { Position }
+	  BlockStart / BlockEnd / BlockBroken { Player }
+	  SprintStart / SprintEnd { Player }
+	  RoundStart   { Round, RoundsPerMatch, RoundLength }     -- kickoff of each round
+	  RoundEnd     { Round, WinnerName?, WinnerPlayer?, Tied, TopTime, NextRoundIn }
+	  MatchEnd     { MVPNames, MVPs, BestTotalHoldTime, NextLobbyIn }
+
+	Personal (FireClient -- only the involved player receives):
+	  PetHatched   { Pet = {Id, Name, Species, Rarity, Size, Mutation?, GripBonus} }
+	  EggGranted   { Egg = {Id, Source, GuaranteedRare, UnlocksAt} }
+	  HandsFull / NotCarrying / NoStamina / OnCooldown / Stunned / PunchWhiff
+	  Exhausted    { Ability }
+	  GripSave     (also personal echo)
+	  NotEnoughClout / NotEnoughFragments { Need, Have }
+	  EggNotReady  { ReadyAt }   DataNotReady {}
+
+	Match flow also exists as structured remotes (MatchStateChanged,
+	RoundEnded, MatchEnded) -- see GameREADME for those payloads.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local FeedbackEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("FeedbackEvent")
+
+local player = Players.LocalPlayer
+
+local VFXBridge = {}
+
+---------------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------------
+
+-- Player -> their Character; bot Model -> itself; nil-safe.
+local function resolveCharacter(entity)
+	if entity == nil then
+		return nil
+	end
+	if entity:IsA("Player") then
+		return entity.Character
+	end
+	if entity:IsA("Model") then
+		return entity
+	end
+	return nil
+end
+
+local function involvesLocalPlayer(data)
+	return data.Player == player
+		or data.Attacker == player
+		or data.Victim == player
+end
+
+local function localRootPosition()
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return root and root.Position or nil
+end
+
+-- True when a world position is close enough to matter for shake/FX.
+local function nearLocalPlayer(position, radius)
+	local mine = localRootPosition()
+	if not mine or typeof(position) ~= "Vector3" then
+		return false
+	end
+	return (position - mine).Magnitude <= (radius or Config.Camera.ShakeRadius)
+end
+
+---------------------------------------------------------------------------
+-- STUBS -- fill these in during the polish pass
+---------------------------------------------------------------------------
+
+--[[
+	PunchVFX: a punch CONNECTED (PunchHit).
+	params = {
+	  Attacker, Victim          : Player | bot Model
+	  AttackerCharacter,
+	  VictimCharacter           : Model?  (attach emitters here)
+	  Position                  : Vector3 (victim's torso)
+	  Result                    : "Hit" | "Blocked" | "IFramed"
+	  InvolvesLocalPlayer       : boolean
+	  NearLocalPlayer           : boolean
+	}
+	Suggestions: hit spark at Position, "Blocked" -> shield ripple,
+	"IFramed" -> afterimage/whoosh, impact sound pitch by Result.
+]]
+function VFXBridge.PlayPunchVFX(params)
+	-- TODO(art): punch impact VFX/SFX.
+end
+
+--[[
+	StealVFX: the egg was knocked loose out of someone's hands (EggStolen).
+	params = {
+	  Attacker, Victim          : Player | bot Model
+	  AttackerCharacter, VictimCharacter : Model?
+	  Position                  : Vector3 (where the steal happened)
+	  InvolvesLocalPlayer       : boolean
+	  NearLocalPlayer           : boolean
+	}
+	Suggestions: gold burst + egg trail, victim "loss" flash, crowd sting SFX.
+]]
+function VFXBridge.PlayStealVFX(params)
+	-- TODO(art): steal VFX/SFX.
+end
+
+--[[
+	CrackVFX: anything egg-shaped happening (throws, fumbles, impacts,
+	out-of-bounds, respawns).
+	params = {
+	  Reason                    : "Thrown" | "Fumble" | "DashFumble" | "Impact"
+	                            | "OutOfBounds" | "Respawn"
+	  Position                  : Vector3
+	  Egg                       : the egg Part? (Workspace.Egg)
+	  Player                    : Player | bot Model? (actor when applicable)
+	  PlayerCharacter           : Model?
+	  Victim                    : Player | bot Model? ("Impact" only)
+	  FumbleReason              : string? (raw EggFumble Reason for "Fumble")
+	  InvolvesLocalPlayer       : boolean
+	  NearLocalPlayer           : boolean
+	}
+	Suggestions: shell-crack particles, "Respawn" -> materialize beam at
+	center pad, "OutOfBounds" -> warning flash.
+]]
+function VFXBridge.PlayCrackVFX(params)
+	-- TODO(art): egg crack/throw/impact VFX/SFX.
+end
+
+--[[
+	ScreenShake: subtle camera shake. Default implementation forwards to
+	CameraController (_G.CTECamera.AddShake) so it already works; replace or
+	extend with screenspace effects (blur kick, chromatic hit, etc).
+	  intensity : number, roughly 0.4 (small) .. 1.0 (big)
+	  position  : Vector3? world position of the cause (nil = local-only)
+]]
+function VFXBridge.ScreenShake(intensity, position)
+	local cameraApi = _G.CTECamera
+	if cameraApi and type(cameraApi.AddShake) == "function" then
+		cameraApi.AddShake(intensity)
+	end
+	-- TODO(art): extra screenspace juice here.
+end
+
+--[[
+	Catch-all for every other FeedbackEvent kind (pickup, dash start, block,
+	sprint, round/match flow, personal meta toasts...). Add cases as needed.
+]]
+function VFXBridge.OnOtherEvent(kind, data)
+	-- TODO(art): e.g. RoundStart -> announcer VO, PetHatched -> confetti.
+end
+
+---------------------------------------------------------------------------
+-- Routing (no need to edit below unless you want different trigger rules)
+---------------------------------------------------------------------------
+
+local function buildParams(data)
+	return {
+		Attacker = data.Attacker,
+		Victim = data.Victim,
+		Player = data.Player,
+		AttackerCharacter = resolveCharacter(data.Attacker),
+		VictimCharacter = resolveCharacter(data.Victim),
+		PlayerCharacter = resolveCharacter(data.Player),
+		Position = data.Position,
+		Result = data.Result,
+		InvolvesLocalPlayer = involvesLocalPlayer(data),
+		NearLocalPlayer = nearLocalPlayer(data.Position),
+	}
+end
+
+local function eggParams(data, reason)
+	local params = buildParams(data)
+	params.Reason = reason
+	params.Egg = workspace:FindFirstChild("Egg")
+	params.FumbleReason = data.Reason
+	return params
+end
+
+FeedbackEvent.OnClientEvent:Connect(function(kind, data)
+	if type(data) ~= "table" then
+		data = {}
+	end
+
+	if kind == "PunchHit" then
+		local params = buildParams(data)
+		VFXBridge.PlayPunchVFX(params)
+		if data.Result == "Hit" and (params.InvolvesLocalPlayer or params.NearLocalPlayer) then
+			VFXBridge.ScreenShake(Config.Camera.ShakePerPunchHit, data.Position)
+		end
+
+	elseif kind == "EggStolen" then
+		VFXBridge.PlayStealVFX(buildParams(data))
+
+	elseif kind == "EggThrown" then
+		VFXBridge.PlayCrackVFX(eggParams(data, "Thrown"))
+
+	elseif kind == "EggFumble" then
+		VFXBridge.PlayCrackVFX(eggParams(data, "Fumble"))
+
+	elseif kind == "DashFumble" then
+		local params = eggParams(data, "DashFumble")
+		VFXBridge.PlayCrackVFX(params)
+		if params.InvolvesLocalPlayer or params.NearLocalPlayer then
+			VFXBridge.ScreenShake(Config.Camera.ShakePerDashFumble, data.Position)
+		end
+
+	elseif kind == "EggImpact" then
+		local params = eggParams(data, "Impact")
+		VFXBridge.PlayCrackVFX(params)
+		if params.InvolvesLocalPlayer or params.NearLocalPlayer then
+			VFXBridge.ScreenShake(Config.Camera.ShakePerEggImpact, data.Position)
+		end
+
+	elseif kind == "EggOutOfBounds" then
+		VFXBridge.PlayCrackVFX(eggParams(data, "OutOfBounds"))
+		if nearLocalPlayer(data.Position) then
+			VFXBridge.ScreenShake(Config.Camera.ShakePerEggOut, data.Position)
+		end
+
+	elseif kind == "EggRespawn" then
+		VFXBridge.PlayCrackVFX(eggParams(data, "Respawn"))
+
+	else
+		VFXBridge.OnOtherEvent(kind, data)
+	end
+end)
+
+if Config.DebugVerboseLogging then
+	print("[VFXBridge] Listening: fill PlayPunchVFX/PlayStealVFX/PlayCrackVFX/ScreenShake to add juice")
+end
+]]></ProtectedString>
+</Properties>
+</Item>
 </Item>
 </Item>
 </roblox>

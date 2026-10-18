@@ -72,7 +72,8 @@
 				"$path": "src/StarterPlayer/StarterCharacterScripts"
 			},
 			"StarterPlayerScripts": {
-				"$className": "StarterPlayerScripts"
+				"$className": "StarterPlayerScripts",
+				"$path": "src/StarterPlayer/StarterPlayerScripts"
 			}
 		}
 	}

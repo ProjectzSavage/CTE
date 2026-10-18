@@ -75,6 +75,11 @@ def materialize_path(dir_path: str) -> list[Item | RawXml]:
         elif entry.endswith(LUA_SUFFIXES):
             cls, name = script_kind(entry)
             children.append(make_script(name, cls, read_source(full)))
+        elif entry.endswith(".txt"):
+            # Rojo convention: plain .txt -> StringValue named after the file.
+            value = make_simple(entry[: -len(".txt")], "StringValue")
+            value.string("Value", read_source(full))
+            children.append(value)
         elif entry.endswith(".rbxmx") or entry.endswith(".rbxmx.xml"):
             xml_text = read_source(full)
             children.append(RawXml(gen_arena.extract_first_item(xml_text)))
@@ -242,6 +247,36 @@ def validate(root: ET.Element) -> list[str]:
                          ("LocalScript", "ClientInput")])
     if client_input is None:
         problems.append("StarterCharacterScripts/ClientInput LocalScript missing")
+
+    # Task-8 polish hooks: camera + VFX bridge in StarterPlayerScripts
+    sps = find([("StarterPlayer", None), ("StarterPlayerScripts", None)])
+    if sps is None:
+        problems.append("StarterPlayerScripts missing")
+    else:
+        sps_names = {
+            item.find("./Properties/string[@name='Name']").text: item.get("class")
+            for item in sps.findall("Item")
+        }
+        for script_name in ("CameraController", "VFXBridge"):
+            if sps_names.get(script_name) != "LocalScript":
+                problems.append(f"StarterPlayerScripts/{script_name} must be a LocalScript")
+
+    # In-game final README (StringValue printed by Main at boot)
+    modules_folder = find([("ReplicatedStorage", None), ("Folder", "Modules")])
+    if modules_folder is None:
+        problems.append("ReplicatedStorage/Modules folder missing")
+    else:
+        readme = None
+        for item in modules_folder.findall("Item"):
+            name = item.find("./Properties/string[@name='Name']")
+            if item.get("class") == "StringValue" and name is not None and name.text == "GameREADME":
+                readme = item
+        if readme is None:
+            problems.append("Modules/GameREADME StringValue missing")
+        else:
+            value = readme.find("./Properties/string[@name='Value']")
+            if value is None or not (value.text or "").strip():
+                problems.append("Modules/GameREADME must carry the README text")
 
     # GUI: ScreenGui with controller + screen modules
     cte_gui = find([("StarterGui", None), ("ScreenGui", "CTEGui")])

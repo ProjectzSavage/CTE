@@ -187,5 +187,41 @@ debugCommands.Event:Connect(function(command, argument)
 	runDebugCommand(command, argument, nil)
 end)
 
+-- 6) Final project README + LIVE Config dump (Task 8 deliverable: readable
+--    in the Output on every boot; the static text lives in
+--    ReplicatedStorage.Modules.GameREADME, the dump can never go stale).
+local function dumpConfigValues(tbl, prefix)
+	local keys = {}
+	for key in pairs(tbl) do
+		table.insert(keys, key)
+	end
+	table.sort(keys, function(a, b)
+		return tostring(a) < tostring(b)
+	end)
+	for _, key in ipairs(keys) do
+		local value = tbl[key]
+		local path = (prefix == "") and tostring(key) or (prefix .. "." .. tostring(key))
+		if type(value) == "table" then
+			dumpConfigValues(value, path)
+		else
+			print(("[Config] %s = %s"):format(path, tostring(value)))
+		end
+	end
+end
+
+local modulesFolder = ReplicatedStorage:WaitForChild("Modules")
+local gameReadme = modulesFolder:FindFirstChild("GameREADME")
+if gameReadme and gameReadme:IsA("StringValue") then
+	print("================= CLUTCH THE EGG -- PROJECT README =================")
+	for line in (gameReadme.Value .. "\n"):gmatch("([^\n]*)\n") do
+		print(line)
+	end
+	print("================= LIVE CONFIG DUMP (all values) =================")
+	dumpConfigValues(Config, "")
+	print("================= END README / CONFIG DUMP =================")
+else
+	warn("[Main] ReplicatedStorage.Modules.GameREADME (StringValue) missing")
+end
+
 print("[Clutch the Egg] Server bootstrap complete -- match + bots + economy + "
-	.. "hatchery + matchmaking + anti-cheat live (Tasks 6-7)")
+	.. "hatchery + matchmaking + anti-cheat + VFX/camera hooks live (Task 8)")

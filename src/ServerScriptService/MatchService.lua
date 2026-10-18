@@ -61,6 +61,14 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local MatchStateChanged = Remotes:WaitForChild("MatchStateChanged")
 local RoundEnded = Remotes:WaitForChild("RoundEnded")
 local MatchEnded = Remotes:WaitForChild("MatchEnded")
+local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
+
+-- Flow events for the polish layer (VFXBridge listens to FeedbackEvent only,
+-- so round/match moments are mirrored here as world feedback kinds:
+-- "RoundStart", "RoundEnd", "MatchEnd").
+local function broadcastFeedback(kind, data)
+	FeedbackEvent:FireAllClients(kind, data or {})
+end
 
 local MatchService = {}
 
@@ -219,6 +227,11 @@ local function playRound(roundNumber)
 		RoundLength = length,
 		TimeLeft = length,
 	})
+	broadcastFeedback("RoundStart", {
+		Round = roundNumber,
+		RoundsPerMatch = Config.RoundsPerMatch,
+		RoundLength = length,
+	})
 	print(("[Match] --- Round %d/%d started (%ds) ---"):format(
 		roundNumber, Config.RoundsPerMatch, length))
 
@@ -268,6 +281,14 @@ local function playRound(roundNumber)
 	setState("RoundEnd", {
 		Round = roundNumber,
 		WinnerName = results.WinnerName,
+		NextRoundIn = Config.RoundEndFreeze,
+	})
+	broadcastFeedback("RoundEnd", {
+		Round = roundNumber,
+		WinnerName = results.WinnerName,
+		WinnerPlayer = results.WinnerPlayer,
+		Tied = results.Tied,
+		TopTime = results.TopTime,
 		NextRoundIn = Config.RoundEndFreeze,
 	})
 	roundDeadline = nil
@@ -341,6 +362,12 @@ local function playMatch()
 
 	setState("MatchEnd", {
 		MVPNames = final.MVPNames,
+		BestTotalHoldTime = final.BestTotalHoldTime,
+		NextLobbyIn = Config.IntermissionLength,
+	})
+	broadcastFeedback("MatchEnd", {
+		MVPNames = final.MVPNames,
+		MVPs = final.MVPs,
 		BestTotalHoldTime = final.BestTotalHoldTime,
 		NextLobbyIn = Config.IntermissionLength,
 	})

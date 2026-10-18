@@ -17,12 +17,17 @@
 	  Dash   : E, Gamepad R1                 (Space is pure jump again)
 	  Sprint : Left Shift (hold), Gamepad R2 -- drains stamina while held
 
-	Mobile: ContextActionService touch buttons are created for all five
-	abilities as a functional placeholder. The real mobile GUI comes in a
-	later prompt and should call the exposed functions below.
+	Mobile scheme (final): the NATIVE left thumbstick handles movement
+	(Roblox's default TouchMovementMode -- this script never touches it),
+	and the four HUD buttons in StarterGui.CTEGui (ATTACK / THROW / BLOCK /
+	DASH) call the _G.CTEInput API below with the same contextual rules
+	(the server enforces context, cooldowns and stamina regardless).
+	ContextActionService touch buttons are DISABLED (createTouchButton =
+	false) so no duplicate default buttons appear. Sprint is intentionally
+	keyboard/gamepad-only on the spec's 4-button layout.
 
-	GUI hook (later prompt): the API is exposed on _G for other client
-	scripts (ScreenGui buttons live in a different LocalScript):
+	GUI hook: the API is exposed on _G for GUI scripts (buttons live in the
+	CTEGui screen, or in your hand-built replacement):
 	  _G.CTEInput.Attack()
 	  _G.CTEInput.Throw()
 	  _G.CTEInput.Dash()
@@ -31,8 +36,8 @@
 	  _G.CTEInput.Sprint(true)   -- press
 	  _G.CTEInput.Sprint(false)  -- release
 
-	TODO(gui): when real buttons exist, consider sinking MouseButton1 here or
-	unbinding it so clicks on the HUD do not also punch.
+	Note: GUI TextButtons sink input, so clicking HUD buttons does NOT also
+	trigger the MouseButton1 attack binding.
 ]]
 
 local Players = game:GetService("Players")
@@ -156,18 +161,19 @@ local function holdAction(setter)
 	end
 end
 
--- createTouchButton = true gives free (ugly) on-screen buttons on mobile
--- until the real GUI is wired up. Rebinding the same names on respawn
--- replaces the previous character's bindings.
-ContextActionService:BindAction("CTE_Attack", attackAction, true,
+-- createTouchButton = false: mobile uses the native left thumbstick plus the
+-- four HUD buttons in CTEGui (which call the _G.CTEInput API above), so CAS
+-- must NOT spawn its own duplicate on-screen buttons. Rebinding the same
+-- names on respawn replaces the previous character's bindings.
+ContextActionService:BindAction("CTE_Attack", attackAction, false,
 	Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonX)
-ContextActionService:BindAction("CTE_Throw", throwAction, true,
+ContextActionService:BindAction("CTE_Throw", throwAction, false,
 	Enum.KeyCode.Q, Enum.KeyCode.F, Enum.KeyCode.ButtonY)
-ContextActionService:BindAction("CTE_Block", holdAction(setBlocking), true,
+ContextActionService:BindAction("CTE_Block", holdAction(setBlocking), false,
 	Enum.UserInputType.MouseButton2, Enum.KeyCode.ButtonL1)
-ContextActionService:BindAction("CTE_Dash", dashAction, true,
+ContextActionService:BindAction("CTE_Dash", dashAction, false,
 	Enum.KeyCode.E, Enum.KeyCode.ButtonR1)
-ContextActionService:BindAction("CTE_Sprint", holdAction(setSprinting), true,
+ContextActionService:BindAction("CTE_Sprint", holdAction(setSprinting), false,
 	Enum.KeyCode.LeftShift, Enum.KeyCode.ButtonR2)
 
 ---------------------------------------------------------------------------

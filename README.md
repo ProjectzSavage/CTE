@@ -15,13 +15,18 @@ it respawns at the center after 3 seconds and hold time pauses.
 
 ---
 
-## Current status: Tasks 6-7 — ECONOMY, BOTS, MATCHMAKING, ANTI-CHEAT are LIVE
+## Current status: Task 8 — POLISH HOOKS are LIVE (art pass is yours)
 
-Open **[`ClutchTheEgg.rbxlx`](ClutchTheEgg.rbxlx)** in Roblox Studio and just
-press **F5** — a **lone player now starts a match against 5 AI bots** after a
-short lobby grace. The GUI is minimal by request: no full-screen menus, just
-the always-on HUD, a small collapsible **CONTROLS** panel on the right, a
-**HATCHERY** button, results panels and settings. The server runs:
+Open **[`ClutchTheEgg.rbxlx`](ClutchTheEgg.rbxlx)** in Roblox Studio and press
+**F5** — a lone player starts a full 3-round match against 5 bots with GUI,
+economy and mobile support. On boot the Output prints the **complete project
+README** (also in `ReplicatedStorage.Modules.GameREADME`) followed by a
+**live dump of every Config value**. The art/VFX pass only needs ONE file:
+`StarterPlayerScripts.VFXBridge` (four stubs, all event payloads documented
+in its header). New GUIs are NOT code-built anymore — the full runtime GUI
+hierarchy is documented in GameREADME section 8 for manual building.
+
+The server runs:
 
 ```
 Lobby (1+ human; bots fill to 6 after grace) -> Countdown (3..2..1)
@@ -42,16 +47,18 @@ sections below.
 
 | Ability | Keyboard / Mouse | Gamepad | Mobile |
 | --- | --- | --- | --- |
-| Attack (not carrying only) | **Left Mouse** | X | CAS touch button (placeholder) |
-| Throw (carrying only) | **Q** or **F** | Y | CAS touch button (placeholder) |
-| Block (hold) | **Right Mouse** | L1 | CAS touch button (placeholder) |
-| Dash | **E** | R1 | CAS touch button (placeholder) |
-| Sprint (hold — drains stamina) | **Left Shift** | R2 | CAS touch button (placeholder) |
+| Attack (not carrying only) | **Left Mouse** | X | HUD **ATTACK** button |
+| Throw (carrying only) | **Q** or **F** | Y | HUD **THROW** button |
+| Block (hold) | **Right Mouse** | L1 | HUD **BLOCK** button (hold) |
+| Dash | **E** | R1 | HUD **DASH** button |
+| Sprint (hold — drains stamina) | **Left Shift** | R2 | — (keyboard/gamepad only, per the 4-button spec) |
+| Move | WASD | left stick | **native left thumbstick** |
 
-Space is pure jump again. The in-game GUI ability buttons (ATTACK / THROW /
-BLOCK / DASH) call `_G.CTEInput.Attack() / .Throw() / .Dash() / .Block(bool)`
-— the same path as the keyboard, so the server stays the single authority.
-(Sprint remains keyboard/gamepad-only for now.)
+Space is pure jump. The HUD buttons call
+`_G.CTEInput.Attack() / .Throw() / .Dash() / .Block(bool)` — the same path as
+the keyboard, so the server stays the single authority. CAS default touch
+buttons are disabled (`createTouchButton = false`) so nothing doubles up, and
+the bottom-left HUD corner is kept clear for the thumbstick.
 
 ### GUI (`StarterGui.CTEGui`)
 
@@ -171,6 +178,66 @@ bots fill the rest.
 `game.PrivateServerId ~= ""` (and `Config.PrivateServers.Enabled`): matches
 start with **1 human** after a 3s grace, bots fill to 6 — friends can jump
 in while the lobby waits. Everything else behaves identically.
+
+### VFXBridge — the ONE file for the art pass (Task 8)
+
+`StarterPlayerScripts.VFXBridge` (LocalScript) is the single client
+subscriber to `FeedbackEvent` and routes combat moments into four STUBS you
+fill in later (its header documents every payload; entities may be Players
+**or bot Models**, `*Character` fields are pre-resolved, and
+`InvolvesLocalPlayer` / `NearLocalPlayer` flags are included):
+
+| Stub | Fires on | Params |
+| --- | --- | --- |
+| `PlayPunchVFX(params)` | `PunchHit` | Attacker/Victim(+Characters), Position, Result `"Hit"/"Blocked"/"IFramed"` |
+| `PlayStealVFX(params)` | `EggStolen` | Attacker/Victim(+Characters), Position |
+| `PlayCrackVFX(params)` | `EggThrown`, `EggFumble`, `DashFumble`, `EggImpact`, `EggOutOfBounds`, `EggRespawn` | Reason, Position, Egg part, Player/Victim(+Characters), FumbleReason |
+| `ScreenShake(intensity, position)` | big hits (`PunchHit` Hit, `DashFumble`, `EggImpact`, `EggOutOfBounds`) near/involving the local player | defaults forward to `_G.CTECamera.AddShake` — already functional |
+| `OnOtherEvent(kind, data)` | every other kind (pickup, dash, block, sprint, `RoundStart`/`RoundEnd`/`MatchEnd`, `PetHatched`, …) | catch-all for announcer VO, confetti, etc. |
+
+**Confirmed flow events** (new in Task 8, world-wide on `FeedbackEvent`):
+`RoundStart {Round, RoundsPerMatch, RoundLength}`,
+`RoundEnd {Round, WinnerName?, WinnerPlayer?, Tied, TopTime, NextRoundIn}`,
+`MatchEnd {MVPNames, MVPs, BestTotalHoldTime, NextLobbyIn}` — fired by
+MatchService right alongside the `MatchStateChanged` states. Note the
+fumble kind is spelled **`EggFumble`** (not "EggFumbled"); `PetHatched` is
+**personal** (only the hatcher receives it — broadcast it yourself later if
+you want public flex VFX). Full payload catalog: GameREADME section 3 and
+the VFXBridge header.
+
+### Camera (Task 8)
+
+`StarterPlayerScripts.CameraController` keeps the **native Custom camera**
+(smooth follow + full player look/zoom — never fought by scripts) and layers
+on top, all damped and tunable in `Config.Camera`:
+
+* **Carry zoom-out:** FOV 70 → 78 while `HasEgg` (see threats coming).
+* **Sprint kick:** +3 FOV while sprinting (server `SprintStart/End` driven).
+* **Shake hook:** subtle decaying rotational shake (cap 2.5°), fed by
+  `VFXBridge.ScreenShake` → `_G.CTECamera.AddShake(intensity)`; applied at
+  `RenderPriority.Camera + 1` so it never touches position/control.
+
+### Mobile scheme (Task 8, final)
+
+Native **left thumbstick** (untouched Roblox touch movement) + the four HUD
+buttons (ATTACK / THROW / BLOCK-hold / DASH) → `_G.CTEInput` → the same
+server-validated contextual rules as keyboard. CAS duplicate touch buttons
+are disabled; the stamina bar moved to bottom-center so the thumbstick zone
+stays clear; everything is Scale-based with `DeviceSafeArea` insets. A
+mobile player can win MVP: buttons steal/throw/dash, thumbstick navigates,
+hold time accrues identically. **Test:** Test → Local Server → device
+emulator → small phone preset (e.g. iPhone SE class).
+
+### In-game README (Task 8)
+
+`ReplicatedStorage.Modules.GameREADME` (StringValue) is the final project
+README: all systems, all 17 RemoteEvent payloads, the full FeedbackEvent
+catalog, a Config snapshot, the mobile scheme, known placeholder areas, and
+the **complete runtime GUI hierarchy** (section 8) for rebuilding any screen
+by hand. `Main` prints it to the Output on every boot followed by a **live
+recursive Config dump** (`[Config] Section.Key = value` lines) so the numbers
+can never go stale. New GUIs are no longer code-built by request — the
+hierarchies are documented instead.
 
 ### Animations (wired, awaiting assets)
 
@@ -416,6 +483,7 @@ rojo build -o ClutchTheEgg.rbxlx
 | ---------------------------------------------------- | ------------------------------------------------ | ------------- |
 | `default.project.json`                               | structure manifest (also drives the Py builder)  | —             |
 | `src/ReplicatedStorage/Modules/Config.lua`           | `ReplicatedStorage.Modules.Config`               | ModuleScript  |
+| `src/ReplicatedStorage/Modules/GameREADME.txt`       | `ReplicatedStorage.Modules.GameREADME` (printed to Output at boot) | StringValue |
 | remotes (declared in `default.project.json`)         | `ReplicatedStorage.Remotes.*`                    | RemoteEvent   |
 | `src/ServerScriptService/Main.server.lua`            | `ServerScriptService.Main` (+ `DebugCommands` BindableEvent at runtime) | Script |
 | `src/ServerScriptService/MatchService.lua`           | `ServerScriptService.MatchService` (**implemented**) | ModuleScript |
@@ -431,6 +499,8 @@ rojo build -o ClutchTheEgg.rbxlx
 | `src/ServerScriptService/AntiCheatService.lua`       | `ServerScriptService.AntiCheatService` (**implemented** — speed/spam net) | ModuleScript |
 | `src/StarterPlayer/StarterCharacterScripts/ClientInput.client.lua` | `…StarterCharacterScripts.ClientInput` (**implemented**) | LocalScript |
 | `src/StarterPlayer/StarterCharacterScripts/Animations.client.lua` | `…StarterCharacterScripts.Animations` (**implemented**) | LocalScript |
+| `src/StarterPlayer/StarterPlayerScripts/CameraController.client.lua` | `…StarterPlayerScripts.CameraController` (**implemented** — FOV dynamics + shake) | LocalScript |
+| `src/StarterPlayer/StarterPlayerScripts/VFXBridge.client.lua` | `…StarterPlayerScripts.VFXBridge` (**stubs for the art pass** — fill the 4 functions) | LocalScript |
 | `src/StarterGui/CTEGui/GuiMain.client.lua`           | `StarterGui.CTEGui.GuiMain` (**implemented**)    | LocalScript |
 | `src/StarterGui/CTEGui/UiKit.lua`                    | `StarterGui.CTEGui.UiKit` (theme + builders, bot-safe names) | ModuleScript |
 | `src/StarterGui/CTEGui/ControlsPanel.lua`            | `StarterGui.CTEGui.ControlsPanel` (small collapsible controls list) | ModuleScript |
@@ -491,6 +561,15 @@ Geometry constants live in `tools/gen_arena.py` and are documented by the
       + teleport-back + strikes/kick, remote rate limiting, server-computed
       attack ranges), private-server support; GUI slimmed to the always-on
       HUD + small controls panel (no full-screen lobby)
+- [x] Polish prep (Task 8): VFXBridge stub file (PlayPunchVFX/PlayStealVFX/
+      PlayCrackVFX/ScreenShake) wired to every combat event, RoundStart/
+      RoundEnd/MatchEnd feedback kinds added + all payloads documented,
+      CameraController (carry zoom-out + sprint kick + shake hook), final
+      mobile scheme (native thumbstick + 4 HUD buttons, CAS dupes removed),
+      GameREADME StringValue printed to Output with a live Config dump,
+      GUI hierarchies documented for manual building
+- [ ] Art/VFX pass (manual, by you): fill the VFXBridge stubs, upload
+      animations into Config.Animations, egg mesh, arena art, bot animations
 - [ ] Trading pets between players
 - [ ] Real DataStore rollout: publish + enable Studio API access, consider
       ProfileService/session-locking for multi-server safety

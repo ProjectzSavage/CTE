@@ -303,6 +303,27 @@ Config.PrivateServers = {
 }
 
 --------------------------------------------------------------------------
+-- Camera (CameraController.client.lua -- layered on the native follow cam)
+--------------------------------------------------------------------------
+-- The stock Roblox Custom camera already follows smoothly and keeps full
+-- player control (mouse/touch look, zoom). CameraController only ADDS:
+-- a damped FOV zoom-out while carrying (+ sprint kick) and a subtle
+-- rotational shake on big hits (fed by VFXBridge.ScreenShake).
+Config.Camera = {
+	BaseFOV = 70,
+	CarryFOVBonus = 8,        -- slight zoom-out while carrying the egg
+	SprintFOVBonus = 3,       -- subtle speed feel while sprinting
+	FovLerpSpeed = 4,         -- FOV smoothing per second
+	ShakeDecay = 6,           -- shake fades at this rate per second
+	ShakeMaxDegrees = 2.5,    -- hard cap on shake angle (subtle, never sickening)
+	ShakePerPunchHit = 0.5,   -- intensities fed to ScreenShake
+	ShakePerDashFumble = 0.9,
+	ShakePerEggImpact = 0.7,
+	ShakePerEggOut = 0.4,
+	ShakeRadius = 40,         -- world events only shake within this many studs
+}
+
+--------------------------------------------------------------------------
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
