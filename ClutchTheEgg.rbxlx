@@ -284,6 +284,12 @@ Config.DashCooldownCarrying = 2.5
 Config.DashStaminaCostCarrying = 30
 Config.DashIFramesCarrying = 0
 
+-- Carrier dash collisions (Config.EggDropOnDashCollision): dashing into a
+-- player fumbles the egg and bumps the victim a little.
+Config.DashCollisionRadius = 4     -- studs between torsos that counts as a dash hit
+Config.DashCollisionKnockback = 12 -- horizontal push applied to the victim (studs/s)
+Config.DashCollisionUpward = 4
+
 --------------------------------------------------------------------------
 -- Attack (punch -- enabled ONLY when NOT holding the egg; "HANDS FULL" otherwise)
 --------------------------------------------------------------------------
@@ -294,6 +300,7 @@ Config.AttackUpwardKnockback = 8 -- small pop-up so hits feel chunky
 Config.AttackCooldown = 0.6      -- seconds
 Config.AttackStaminaCost = 10
 Config.AttackHitstun = 0.25      -- brief control loss for the victim
+Config.AttackFacingDot = 0       -- min dot(facing, to-victim); 0 = whole forward hemisphere
 
 --------------------------------------------------------------------------
 -- Throw (enabled ONLY while holding the egg)
@@ -335,6 +342,16 @@ Config.EggOutOfBoundsHorizontal = 70  -- beyond this |X|/|Z| counts as out of th
 Config.EggLooseResetRadius = 8        -- unclaimed egg farther than this from center resets to center
 Config.EggFumblePop = 4               -- gentle upward velocity when a fumble drops the egg (studs/s)
 
+-- Thrown-egg impact: for a short window a thrown egg is "hot" -- it knocks
+-- players back and bounces loose instead of being caught (loose-pickup only
+-- in this version; team catches come later).
+Config.EggThrowDangerTime = 0.8       -- hot window after release (seconds)
+Config.EggThrowImpactMinSpeed = 18    -- below this speed a thrown egg stops being dangerous
+Config.EggThrowImpactKnockback = 14   -- horizontal knockback to the struck player (studs/s)
+Config.EggThrowImpactUpward = 6
+Config.EggThrowImpactStun = 0.15      -- brief stagger when a thrown egg hits you
+Config.EggImpactPickupDelay = 0.5     -- the struck player cannot grab the egg for this long
+
 --------------------------------------------------------------------------
 -- Arena (documents the BUILT geometry -- keep in sync with tools/gen_arena.py)
 --------------------------------------------------------------------------
@@ -350,6 +367,7 @@ Config.ArenaEggSpawnHeight = 3    -- Y of the Workspace.Arena.EggSpawnPoint mark
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
+Config.DebugAllowCommandBar = true -- DebugCommand remote works in Studio only (never in production)
 
 return Config
 ]]></ProtectedString>
@@ -415,58 +433,730 @@ return Config
 	<string name="Name">FeedbackEvent</string>
 </Properties>
 </Item>
+<Item class="RemoteEvent" referent="RBX31">
+<Properties>
+	<string name="Name">DebugCommand</string>
+</Properties>
 </Item>
 </Item>
-<Item class="ServerScriptService" referent="RBX31">
+</Item>
+<Item class="ServerScriptService" referent="RBX32">
 <Properties>
 	<string name="Name">ServerScriptService</string>
 </Properties>
-<Item class="ModuleScript" referent="RBX32">
+<Item class="ModuleScript" referent="RBX33">
 <Properties>
 	<string name="Name">CombatService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
 	CombatService (ServerScriptService.CombatService)
 	=================================================
-	STATUS: stub -- gameplay not implemented yet.
+	Server-authoritative abilities: Attack, Throw, Block, Dash + the shared
+	stamina pool. Clients only fire Request* RemoteEvents; EVERY rule is
+	checked here (context, cooldown, stamina, alive/stun state). Cheaters get
+	rejected and nothing happens.
 
-	Future responsibilities
-	-----------------------
-	* Validate RequestAttack on the server: attacker must NOT be holding the
-	  egg ("HANDS FULL" feedback otherwise), plus cooldown / range
-	  (Config.AttackRange) / stamina checks. Apply knockback
-	  (Config.AttackKnockback), reduced by the victim's block
-	  (Config.BlockKnockbackReduction) and negated by dash i-frames.
-	  Hitting the carrier knocks the egg loose (hand off to EggService).
-	* Validate RequestThrow: only while holding the egg; lob it with
-	  Config.ThrowSpeed + Config.ThrowUpwardBias (hand off to EggService).
-	* Validate RequestDash: cooldown / stamina; carrying players get the
-	  shorter no-i-frame dash, and dashing into a player drops the egg.
-	* Track block state (RequestBlockStart / RequestBlockEnd): speed
-	  multiplier, stamina drain, knockback reduction. Blocking while carrying
-	  still accrues hold time (that rule lives in EggService/ScoringService).
-	* Manage the stamina pool (spend + regen) for every player.
-	* Fire FeedbackEvent for every hit / dash / block / "HANDS FULL" deny so
-	  VFX, SFX and GUI polish can hook in later.
+	Ability rules (from the game spec)
+	----------------------------------
+	Attack : ONLY when NOT holding the egg ("HandsFull" feedback otherwise).
+	         Short-range punch (Config.AttackRange + forward hemisphere).
+	         On hit: knockback (Config.AttackKnockback) + brief hitstun.
+	         If the victim is the carrier: EggService.Fumble with a knock-loose
+	         pop -> "EggStolen" feedback. Cooldown Config.AttackCooldown.
+	Throw  : ONLY when holding the egg. Launches it via EggService.ReleaseThrow
+	         at Config.ThrowSpeed with an upward lob. While "hot", the thrown
+	         egg knocks players back and bounces loose (HandleEggImpact).
+	Block  : ALWAYS usable. Incoming knockback reduced by
+	         Config.BlockKnockbackReduction, move speed multiplied by
+	         Config.BlockSpeedMultiplier, drains Config.BlockStaminaDrain/s.
+	         A blocking carrier STILL accrues hold time (EggService does not
+	         care about blocking). Block breaks automatically at 0 stamina.
+	Dash   : ALWAYS usable. Speed burst for Config.DashDuration. NOT carrying:
+	         brief i-frames (Config.DashIFrames). Carrying: shorter dash, NO
+	         i-frames, and colliding with a player fumbles the egg
+	         ("DashFumble" feedback + small knockback to the victim).
+
+	Stamina: max Config.StaminaMax, regenerates Config.StaminaRegenPerSecond
+	         after Config.StaminaRegenDelay without spending. Dash and Attack
+	         cost stamina up front; Block drains while held. Published to
+	         clients as the "Stamina" Player attribute (rounded) for the future
+	         HUD.
+
+	Speed ownership: this module is the ONLY writer of Humanoid.WalkSpeed.
+	         Base = carrier ? CarrySpeed : WalkSpeed, then block/stun/dash
+	         modifiers. Recalculated every tick (writes only on change) plus
+	         on HasEgg attribute changes.
+
+	FeedbackEvent kinds fired here
+	------------------------------
+	FireAllClients : PunchSwing, PunchHit, BlockedHit, IFrameDodge, EggStolen,
+	                 DashStart, DashFumble, BlockStart, BlockEnd, BlockBroken
+	FireClient     : HandsFull, NotCarrying, NoStamina, OnCooldown, Stunned,
+	                 PunchWhiff
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+-- One-directional dependency: CombatService may use EggService, never the
+-- reverse (EggService calls back through the injected impact handler).
+local EggService = require(ServerScriptService:WaitForChild("EggService"))
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local RequestAttack = Remotes:WaitForChild("RequestAttack")
+local RequestThrow = Remotes:WaitForChild("RequestThrow")
+local RequestDash = Remotes:WaitForChild("RequestDash")
+local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
+local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
 
 local CombatService = {}
 
-function CombatService.Init()
-	-- TODO(combat): remote handlers, validation, knockback, stamina.
-	if Config.DebugVerboseLogging then
-		print("[CombatService] stub initialized")
+local COMBAT_TICK = 0.05 -- 20 Hz: stamina, dash windows, collisions, speed recalc
+
+---------------------------------------------------------------------------
+-- Per-player combat state (server only)
+---------------------------------------------------------------------------
+
+local statuses = {} -- { [Player] = status }
+local lastTickTime = 0
+local initialized = false
+
+local function now()
+	return os.clock()
+end
+
+local function newStatus()
+	return {
+		stamina = Config.StaminaMax,
+		publishedStamina = -1, -- forces the first attribute publish
+		lastSpendTime = -math.huge,
+		blocking = false,
+		attackReadyAt = 0,
+		dashReadyAt = 0,
+		dashUntil = 0,
+		dashSpeed = Config.WalkSpeed,
+		dashCollisionDone = false,
+		iFramesUntil = 0,
+		stunUntil = 0,
+	}
+end
+
+local function getStatus(player)
+	local status = statuses[player]
+	if not status then
+		status = newStatus()
+		statuses[player] = status
 	end
+	return status
+end
+
+---------------------------------------------------------------------------
+-- Small helpers
+---------------------------------------------------------------------------
+
+local function getAliveCharacter(player)
+	local character = player.Character
+	if not character then
+		return nil
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return nil
+	end
+	return character
+end
+
+local function getRoot(player)
+	local character = player.Character
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function broadcastFeedback(kind, data)
+	FeedbackEvent:FireAllClients(kind, data or {})
+end
+
+local function rejectClient(player, kind, data)
+	data = data or {}
+	FeedbackEvent:FireClient(player, kind, data)
+end
+
+local function spendStamina(status, amount)
+	if status.stamina < amount then
+		return false
+	end
+	status.stamina = status.stamina - amount
+	status.lastSpendTime = now()
+	return true
+end
+
+-- The single authority for movement speed. Called every tick and on state
+-- flips; only writes when the value actually changes (no property churn).
+local function recalcSpeed(player)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return
+	end
+
+	local status = getStatus(player)
+	local nowv = now()
+	local speed
+
+	if nowv < status.stunUntil then
+		speed = 0 -- hitstun: rooted in place
+	elseif nowv < status.dashUntil then
+		speed = status.dashSpeed -- dash burst overrides everything
+	else
+		local isCarrier = (EggService.GetCarrier() == player)
+		speed = isCarrier and Config.CarrySpeed or Config.WalkSpeed
+		if status.blocking then
+			speed = speed * Config.BlockSpeedMultiplier
+		end
+	end
+
+	if math.abs(humanoid.WalkSpeed - speed) > 0.01 then
+		humanoid.WalkSpeed = speed
+	end
+end
+
+---------------------------------------------------------------------------
+-- Knockback (shared by punches, thrown-egg impacts and dash collisions)
+---------------------------------------------------------------------------
+
+--[[
+	CombatService.ApplyKnockback(player, direction, force, upwardForce, stunTime)
+	  direction   : Vector3 push direction (flattened to horizontal internally)
+	  force       : horizontal speed applied (studs/s)
+	  upwardForce : vertical pop (studs/s), optional
+	  stunTime    : seconds of rooted hitstun, optional (blocked victims skip it)
+
+	Returns "Hit" | "Blocked" | "IFramed" | "Invalid".
+]]
+function CombatService.ApplyKnockback(player, direction, force, upwardForce, stunTime)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return "Invalid"
+	end
+	if typeof(direction) ~= "Vector3" then
+		return "Invalid"
+	end
+
+	local status = getStatus(player)
+	local nowv = now()
+	if nowv < status.iFramesUntil then
+		return "IFramed"
+	end
+
+	local root = getRoot(player)
+	if not root then
+		return "Invalid"
+	end
+
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	if flat.Magnitude < 0.001 then
+		flat = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+		if flat.Magnitude < 0.001 then
+			flat = Vector3.new(0, 0, 1)
+		end
+	end
+	flat = flat.Unit
+
+	local appliedForce = force
+	local appliedUp = upwardForce or 0
+	local blocked = status.blocking
+	if blocked then
+		appliedForce = appliedForce * (1 - Config.BlockKnockbackReduction)
+		appliedUp = appliedUp * (1 - Config.BlockKnockbackReduction)
+	end
+
+	root.AssemblyLinearVelocity = Vector3.new(flat.X * appliedForce, appliedUp, flat.Z * appliedForce)
+
+	if stunTime and stunTime > 0 and not blocked then
+		status.stunUntil = nowv + stunTime
+	end
+	recalcSpeed(player)
+
+	return blocked and "Blocked" or "Hit"
+end
+
+---------------------------------------------------------------------------
+-- Attack
+---------------------------------------------------------------------------
+
+local function handleAttack(player)
+	local character = getAliveCharacter(player)
+	if not character then
+		return
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+
+	local status = getStatus(player)
+	local nowv = now()
+
+	-- Contextual rule: HANDS FULL -- no punching while carrying the egg.
+	if EggService.GetCarrier() == player then
+		rejectClient(player, "HandsFull", { Ability = "Attack" })
+		return
+	end
+	if nowv < status.stunUntil then
+		rejectClient(player, "Stunned", { Ability = "Attack" })
+		return
+	end
+	if nowv < status.attackReadyAt then
+		rejectClient(player, "OnCooldown", { Ability = "Attack" })
+		return
+	end
+	if not spendStamina(status, Config.AttackStaminaCost) then
+		rejectClient(player, "NoStamina", { Ability = "Attack" })
+		return
+	end
+
+	status.attackReadyAt = nowv + Config.AttackCooldown
+	broadcastFeedback("PunchSwing", { Player = player, Position = root.Position })
+
+	-- Hit detection: everyone inside range AND in the forward hemisphere.
+	local look = root.CFrame.LookVector
+	local lookFlat = Vector3.new(look.X, 0, look.Z)
+	if lookFlat.Magnitude > 0.001 then
+		lookFlat = lookFlat.Unit
+	else
+		lookFlat = nil -- looking straight up/down: accept any direction
+	end
+
+	local hits = 0
+	for _, victim in ipairs(Players:GetPlayers()) do
+		if victim ~= player then
+			local victimRoot = getRoot(victim)
+			local victimCharacter = getAliveCharacter(victim)
+			if victimRoot and victimCharacter then
+				local offset = victimRoot.Position - root.Position
+				local distance = offset.Magnitude
+				-- +1 stud accounts for the victim's body radius.
+				if distance <= Config.AttackRange + 1 then
+					local pushDir = Vector3.new(offset.X, 0, offset.Z)
+					if pushDir.Magnitude < 0.001 then
+						-- Point-blank (dead center): push wherever we face.
+						pushDir = lookFlat or Vector3.new(0, 0, 1)
+					end
+					pushDir = pushDir.Unit
+
+					local inCone = (lookFlat == nil)
+						or (lookFlat:Dot(pushDir) >= Config.AttackFacingDot)
+					if inCone then
+						hits = hits + 1
+
+						local victimWasCarrier = (EggService.GetCarrier() == victim)
+						local victimIFramed = (nowv < getStatus(victim).iFramesUntil)
+
+						local result = CombatService.ApplyKnockback(
+							victim, pushDir,
+							Config.AttackKnockback, Config.AttackUpwardKnockback,
+							Config.AttackHitstun
+						)
+
+						broadcastFeedback("PunchHit", {
+							Attacker = player,
+							Victim = victim,
+							Position = victimRoot.Position,
+							Result = result,
+						})
+						if result == "Blocked" then
+							broadcastFeedback("BlockedHit", {
+								Attacker = player,
+								Victim = victim,
+								Position = victimRoot.Position,
+							})
+						elseif result == "IFramed" then
+							broadcastFeedback("IFrameDodge", {
+								Attacker = player,
+								Victim = victim,
+								Position = victimRoot.Position,
+							})
+						end
+
+						-- Steal: punching the carrier knocks the egg loose
+						-- (i-framed carriers keep it -- the punch fully whiffed).
+						if victimWasCarrier and not victimIFramed then
+							EggService.Fumble(
+								victim,
+								"Attacked",
+								Vector3.new(
+									pushDir.X * Config.EggKnockLooseSpeed,
+									Config.EggKnockLooseUpward,
+									pushDir.Z * Config.EggKnockLooseSpeed
+								)
+							)
+							broadcastFeedback("EggStolen", {
+								Attacker = player,
+								Victim = victim,
+								Position = victimRoot.Position,
+							})
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if hits == 0 then
+		rejectClient(player, "PunchWhiff", {})
+	end
+
+	if Config.DebugVerboseLogging and hits > 0 then
+		print("[CombatService] " .. player.Name .. " punched " .. hits .. " target(s)")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Throw
+---------------------------------------------------------------------------
+
+local function handleThrow(player)
+	local character = getAliveCharacter(player)
+	if not character then
+		return
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+
+	local status = getStatus(player)
+
+	-- Contextual rule: can only throw WHILE carrying.
+	if EggService.GetCarrier() ~= player then
+		rejectClient(player, "NotCarrying", { Ability = "Throw" })
+		return
+	end
+	if now() < status.stunUntil then
+		rejectClient(player, "Stunned", { Ability = "Throw" })
+		return
+	end
+
+	-- Throw where the character faces; EggService adds the lob + "hot" window
+	-- and fires the "EggThrown" feedback. Hold time stops the instant it
+	-- leaves the hands (possession ends inside ReleaseThrow).
+	EggService.ReleaseThrow(player, root.CFrame.LookVector)
+end
+
+---------------------------------------------------------------------------
+-- Dash
+---------------------------------------------------------------------------
+
+local function handleDash(player)
+	local character = getAliveCharacter(player)
+	if not character then
+		return
+	end
+
+	local status = getStatus(player)
+	local nowv = now()
+	if nowv < status.stunUntil then
+		rejectClient(player, "Stunned", { Ability = "Dash" })
+		return
+	end
+
+	local isCarrier = (EggService.GetCarrier() == player)
+	local cooldown = isCarrier and Config.DashCooldownCarrying or Config.DashCooldown
+	if nowv < status.dashReadyAt then
+		rejectClient(player, "OnCooldown", { Ability = "Dash" })
+		return
+	end
+
+	local cost = isCarrier and Config.DashStaminaCostCarrying or Config.DashStaminaCost
+	if not spendStamina(status, cost) then
+		rejectClient(player, "NoStamina", { Ability = "Dash" })
+		return
+	end
+
+	local duration = isCarrier and Config.DashDurationCarrying or Config.DashDuration
+	local bonus = isCarrier and Config.DashSpeedBonusCarrying or Config.DashSpeedBonus
+
+	status.dashReadyAt = nowv + cooldown
+	status.dashUntil = nowv + duration
+	status.dashSpeed = (isCarrier and Config.CarrySpeed or Config.WalkSpeed) + bonus
+	status.dashCollisionDone = false
+
+	-- I-frames ONLY when not carrying the egg.
+	if not isCarrier and Config.DashIFrames > 0 then
+		status.iFramesUntil = nowv + Config.DashIFrames
+	end
+
+	broadcastFeedback("DashStart", { Player = player, Carrying = isCarrier })
+	recalcSpeed(player)
+end
+
+-- Carrier dash collision check (runs in the ticker while dashing): bumping
+-- into another player fumbles the egg and nudges the victim.
+local function checkDashCollision(player, status)
+	local root = getRoot(player)
+	if not root then
+		return
+	end
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= player then
+			local otherRoot = getRoot(other)
+			if otherRoot and getAliveCharacter(other) then
+				local offset = otherRoot.Position - root.Position
+				if offset.Magnitude <= Config.DashCollisionRadius then
+					status.dashCollisionDone = true
+
+					local pushDir = Vector3.new(offset.X, 0, offset.Z)
+					if pushDir.Magnitude < 0.001 then
+						pushDir = root.CFrame.LookVector
+					end
+
+					EggService.Fumble(player, "DashCollision")
+					broadcastFeedback("DashFumble", {
+						Player = player,
+						Victim = other,
+						Position = root.Position,
+					})
+					CombatService.ApplyKnockback(
+						other, pushDir,
+						Config.DashCollisionKnockback, Config.DashCollisionUpward,
+						nil
+					)
+					return
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Block
+---------------------------------------------------------------------------
+
+local function handleBlockStart(player)
+	if not getAliveCharacter(player) then
+		return
+	end
+	local status = getStatus(player)
+	if now() < status.stunUntil then
+		rejectClient(player, "Stunned", { Ability = "Block" })
+		return
+	end
+	if not status.blocking then
+		status.blocking = true
+		broadcastFeedback("BlockStart", { Player = player })
+		recalcSpeed(player)
+	end
+end
+
+local function handleBlockEnd(player)
+	local status = getStatus(player)
+	if status.blocking then
+		status.blocking = false
+		broadcastFeedback("BlockEnd", { Player = player })
+		recalcSpeed(player)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Thrown-egg impacts (injected into EggService by Main)
+---------------------------------------------------------------------------
+
+function CombatService.HandleEggImpact(player, eggVelocity)
+	local direction = Vector3.new(eggVelocity.X, 0, eggVelocity.Z)
+	if direction.Magnitude < 0.001 then
+		direction = Vector3.new(0, 0, 1)
+	end
+	local result = CombatService.ApplyKnockback(
+		player, direction,
+		Config.EggThrowImpactKnockback, Config.EggThrowImpactUpward,
+		Config.EggThrowImpactStun
+	)
+	if Config.DebugVerboseLogging then
+		print("[CombatService] Thrown egg hit " .. player.Name .. " (" .. result .. ")")
+	end
+end
+
+---------------------------------------------------------------------------
+-- Player lifecycle
+---------------------------------------------------------------------------
+
+local function bindPlayer(player)
+	statuses[player] = newStatus()
+
+	player.CharacterAdded:Connect(function()
+		-- Fresh life: clear transient states, refill stamina, re-apply speed.
+		local status = getStatus(player)
+		status.blocking = false
+		status.dashUntil = 0
+		status.dashCollisionDone = false
+		status.iFramesUntil = 0
+		status.stunUntil = 0
+		status.stamina = Config.StaminaMax
+		status.lastSpendTime = -math.huge
+		recalcSpeed(player)
+	end)
+
+	-- Possession flips (pickup / fumble / throw) change base speed instantly.
+	player:GetAttributeChangedSignal("HasEgg"):Connect(function()
+		recalcSpeed(player)
+	end)
+
+	if player.Character then
+		recalcSpeed(player)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Ticker (20 Hz): stamina, dash windows, collisions, speed, attribute publish
+---------------------------------------------------------------------------
+
+local function tickOnce()
+	local nowv = now()
+	local dt = nowv - lastTickTime
+	lastTickTime = nowv
+	if dt > COMBAT_TICK * 3 then
+		dt = COMBAT_TICK * 3 -- clamp: server hitches must not drain/regen in bulk
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local status = getStatus(player)
+
+		-- Stamina: block drains; otherwise regen after a short delay.
+		if status.blocking then
+			status.stamina = status.stamina - Config.BlockStaminaDrain * dt
+			status.lastSpendTime = nowv
+			if status.stamina <= 0 then
+				status.stamina = 0
+				status.blocking = false
+				broadcastFeedback("BlockBroken", { Player = player })
+				if Config.DebugVerboseLogging then
+					print("[CombatService] " .. player.Name .. "'s block broke (out of stamina)")
+				end
+			end
+		elseif nowv - status.lastSpendTime >= Config.StaminaRegenDelay then
+			status.stamina = math.min(Config.StaminaMax,
+				status.stamina + Config.StaminaRegenPerSecond * dt)
+		end
+
+		-- Publish rounded stamina as a replicated attribute for the future HUD
+		-- (only writes when the rounded value actually changes).
+		local rounded = math.floor(status.stamina + 0.5)
+		if rounded ~= status.publishedStamina then
+			status.publishedStamina = rounded
+			player:SetAttribute("Stamina", rounded)
+		end
+
+		-- Carrier dash collision -> fumble (spec: EggDropOnDashCollision).
+		if not status.dashCollisionDone
+			and nowv < status.dashUntil
+			and Config.EggDropOnDashCollision
+			and EggService.GetCarrier() == player
+		then
+			checkDashCollision(player, status)
+		end
+
+		-- Single speed authority (handles dash/stun expiry, block, carry).
+		recalcSpeed(player)
+	end
+end
+
+local function startTicker()
+	task.spawn(function()
+		lastTickTime = now()
+		while initialized do
+			tickOnce()
+			task.wait(COMBAT_TICK)
+		end
+	end)
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+function CombatService.Init()
+	if initialized then
+		return
+	end
+	initialized = true
+
+	-- Remote handlers: ignore ALL client-sent arguments (server computes
+	-- targets/directions itself; nothing from the client is trusted).
+	RequestAttack.OnServerEvent:Connect(function(player)
+		handleAttack(player)
+	end)
+	RequestThrow.OnServerEvent:Connect(function(player)
+		handleThrow(player)
+	end)
+	RequestDash.OnServerEvent:Connect(function(player)
+		handleDash(player)
+	end)
+	RequestBlockStart.OnServerEvent:Connect(function(player)
+		handleBlockStart(player)
+	end)
+	RequestBlockEnd.OnServerEvent:Connect(function(player)
+		handleBlockEnd(player)
+	end)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		bindPlayer(player)
+	end
+	Players.PlayerAdded:Connect(bindPlayer)
+	Players.PlayerRemoving:Connect(function(player)
+		statuses[player] = nil
+	end)
+
+	startTicker()
+	print("[CombatService] Initialized: attack/throw/block/dash + stamina live")
+end
+
+-- Read-only snapshots for other systems / the future GUI.
+function CombatService.GetStamina(player)
+	return getStatus(player).stamina
+end
+
+function CombatService.IsBlocking(player)
+	return getStatus(player).blocking
+end
+
+function CombatService.IsDashing(player)
+	return now() < getStatus(player).dashUntil
+end
+
+function CombatService.HasIFrames(player)
+	return now() < getStatus(player).iFramesUntil
+end
+
+function CombatService.IsStunned(player)
+	return now() < getStatus(player).stunUntil
+end
+
+-- One-line snapshot for the DebugCommand "state".
+function CombatService.DebugState()
+	local parts = {}
+	for player, status in pairs(statuses) do
+		if player.Parent then
+			local flags = {}
+			if status.blocking then table.insert(flags, "blocking") end
+			if now() < status.dashUntil then table.insert(flags, "dashing") end
+			if now() < status.iFramesUntil then table.insert(flags, "iframes") end
+			if now() < status.stunUntil then table.insert(flags, "stunned") end
+			table.insert(parts, ("%s[sta=%d %s]"):format(
+				player.Name, math.floor(status.stamina + 0.5), table.concat(flags, "+")))
+		end
+	end
+	table.sort(parts)
+	return #parts > 0 and table.concat(parts, ", ") or "(no players)"
 end
 
 return CombatService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX33">
+<Item class="ModuleScript" referent="RBX34">
 <Properties>
 	<string name="Name">DataService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -494,7 +1184,7 @@ return DataService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX34">
+<Item class="ModuleScript" referent="RBX35">
 <Properties>
 	<string name="Name">EggService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -512,16 +1202,22 @@ return DataService
 	            lost. (Later, MatchService calls StartRound()/EndRound().)
 	Pickup    : Loose egg + character touch (or proximity scan backup) ->
 	            that player becomes the carrier. No button. The egg is welded
-	            in front of the torso, CanCollide/CanTouch turn off, the
-	            carrier's WalkSpeed drops to Config.CarrySpeed and the Player
-	            gets attribute HasEgg = true.
+	            in front of the torso, CanCollide/CanTouch turn off and the
+	            Player gets attribute HasEgg = true. NOTE: the carry speed
+	            penalty (Config.CarrySpeed) is applied by CombatService, which
+	            owns all WalkSpeed math (carry/block/dash/stun modifiers).
 	Hold time : The current carrier accrues seconds on the service ticker.
 	            HoldTimeUpdated broadcasts every Config.HoldTimeSyncInterval
 	            (only while carried, plus one final push after changes).
 	Fumble    : EggService.Fumble(target, reason [, popVelocity]) detaches
-	            the egg, drops it loose at the carrier's position, restores
-	            WalkSpeed, clears HasEgg. Also fires automatically on death,
-	            respawn and leaving the game.
+	            the egg, drops it loose at the carrier's position, clears
+	            HasEgg. Also fires automatically on death, respawn and
+	            leaving the game.
+	Throw     : EggService.ReleaseThrow(player, direction) launches the egg
+	            (CombatService validates the request first). For a short
+	            window the thrown egg is "hot": it knocks players back and
+	            bounces loose instead of being caught; once it slows down it
+	            is a normal loose egg again (loose-pickup only for now).
 	Loose egg : Unclaimed for Config.EggRespawnDelay while away from the
 	            center pad, OR out of bounds (below Config.EggOutOfBoundsY /
 	            past Config.EggOutOfBoundsHorizontal) -> respawns at center.
@@ -533,15 +1229,15 @@ return DataService
 	HoldTimeUpdated(entries)  -- array of {Player = Player, HoldTime = number},
 	                          -- sorted by HoldTime descending (leaderboard order)
 	FeedbackEvent(kind, data) -- kinds fired here: "EggPickup", "EggFumble",
-	                          -- "EggOutOfBounds", "EggRespawn"
+	                          -- "EggOutOfBounds", "EggRespawn", "EggThrown",
+	                          -- "EggImpact"
 
-	Debugging from the Studio command bar while playing:
-	  require(game:GetService("ServerScriptService").EggService).Fumble()
-	  -- or via the BindableEvent created by Main: --
-	  game:GetService("ServerScriptService").DebugCommands:Fire("fumble")
-	  game:GetService("ServerScriptService").DebugCommands:Fire("fumble", "PlayerName")
-	  game:GetService("ServerScriptService").DebugCommands:Fire("respawn_egg")
-	  game:GetService("ServerScriptService").DebugCommands:Fire("state")
+	Debugging from the Studio command bar while playing (the command bar runs
+	in CLIENT context, so use the DebugCommand remote in ReplicatedStorage):
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "PlayerName")
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")
 ]]
 
 local Players = game:GetService("Players")
@@ -578,6 +1274,9 @@ local holdTimes = {}             -- { [Player] = seconds }
 local pickupLockout = {}         -- { [Player] = os.clock() earliest re-grab }
 local looseSince = nil           -- os.clock() when the egg became loose
 local respawnAt = nil            -- os.clock() when STATE_RESPAWNING completes
+local thrower = nil              -- Player? who last threw the egg (self-pickup lockout)
+local thrownHotUntil = 0         -- os.clock() deadline for the thrown egg's impact window
+local impactHandler = nil        -- function(player, eggVelocity) injected by Main (CombatService)
 local broadcastNeeded = false    -- push one more HoldTimeUpdated after a change
 local lastTickTime = 0
 local initialized = false
@@ -627,6 +1326,15 @@ end
 local function broadcastPossession(newCarrier, previousCarrier)
 	broadcastNeeded = true
 	EggPossessionChanged:FireAllClients(newCarrier, previousCarrier)
+end
+
+-- A thrown egg stays "hot" for a short window (and while still fast): it
+-- knocks players back instead of being picked up.
+local function isEggHot()
+	return state == STATE_LOOSE
+		and egg ~= nil
+		and thrownHotUntil > now()
+		and egg.AssemblyLinearVelocity.Magnitude >= Config.EggThrowImpactMinSpeed
 end
 
 local function createEgg()
@@ -702,6 +1410,8 @@ local function spawnAtCenter()
 	state = STATE_LOOSE
 	looseSince = now()
 	respawnAt = nil
+	thrower = nil
+	thrownHotUntil = 0
 	pickupLockout = {} -- fresh center drop: everyone may contest it
 	broadcastNeeded = true
 
@@ -745,7 +1455,12 @@ local function tryPickup(player)
 
 	local lockUntil = pickupLockout[player]
 	if lockUntil and now() < lockUntil then
-		return false -- just fumbled/threw it: cannot instantly re-grab
+		return false -- just fumbled/threw it or just got beaned: cannot instantly re-grab
+	end
+
+	-- A hot thrown egg is not catchable (yet) -- it impacts instead.
+	if isEggHot() and player ~= thrower then
+		return false
 	end
 
 	local character = player.Character
@@ -771,9 +1486,8 @@ local function tryPickup(player)
 	carryWeld.Part1 = egg
 	carryWeld.Parent = egg
 
-	-- Carry penalty: slower movement while holding.
-	humanoid.WalkSpeed = Config.CarrySpeed
-
+	-- Carry penalty (Config.CarrySpeed) is applied by CombatService, which
+	-- watches the HasEgg attribute and owns all WalkSpeed math.
 	player:SetAttribute("HasEgg", true)
 	if holdTimes[player] == nil then
 		holdTimes[player] = 0
@@ -789,14 +1503,30 @@ local function tryPickup(player)
 end
 
 local function onEggTouched(hit)
-	if state ~= STATE_LOOSE then
+	if state ~= STATE_LOOSE or not egg then
 		return
 	end
 	local character = hit:FindFirstAncestorOfClass("Model")
 	local player = character and Players:GetPlayerFromCharacter(character)
-	if player then
-		tryPickup(player)
+	if not player then
+		return
 	end
+
+	-- Hot thrown egg: knock the struck player back (via the injected
+	-- CombatService handler), defuse the egg and bounce it loose.
+	if isEggHot() and player ~= thrower then
+		local impactVelocity = egg.AssemblyLinearVelocity
+		thrownHotUntil = 0 -- defuse: it is a normal loose egg again
+		pickupLockout[player] = now() + Config.EggImpactPickupDelay
+		egg.AssemblyLinearVelocity = impactVelocity * -0.2 + Vector3.new(0, 5, 0)
+		broadcastFeedback("EggImpact", { Player = player, Position = egg.Position })
+		if impactHandler then
+			impactHandler(player, impactVelocity)
+		end
+		return
+	end
+
+	tryPickup(player)
 end
 
 ---------------------------------------------------------------------------
@@ -811,18 +1541,15 @@ local function doFumble(player, reason, popVelocity)
 	carrier = nil
 
 	previousCarrier:SetAttribute("HasEgg", false)
-
-	-- Restore walk speed if the character is still alive.
-	local humanoid = getAliveHumanoid(previousCarrier.Character)
-	if humanoid then
-		humanoid.WalkSpeed = Config.WalkSpeed
-	end
+	-- WalkSpeed restoration happens in CombatService (HasEgg attribute watch).
 
 	-- Detach from the torso.
 	if carryWeld then
 		carryWeld:Destroy()
 		carryWeld = nil
 	end
+	thrower = nil
+	thrownHotUntil = 0
 
 	-- Place the egg loose at the carrier's position (slightly forward+up so
 	-- it does not spawn inside the character), clamped inside the arena so a
@@ -874,10 +1601,8 @@ local function bindCharacter(player, character)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 		or character:WaitForChild("Humanoid", 10)
 	if humanoid then
-		-- Config is the source of truth for base speed on every (re)spawn.
-		-- TODO(combat): CombatService will later layer block/dash modifiers on top.
-		humanoid.WalkSpeed = Config.WalkSpeed
-
+		-- Base WalkSpeed on (re)spawn is applied by CombatService, which owns
+		-- all speed modifiers (carry / block / dash / stun).
 		humanoid.Died:Connect(function()
 			doFumble(player, "Died")
 		end)
@@ -1136,6 +1861,80 @@ function EggService.RespawnEggNow()
 	spawnAtCenter()
 end
 
+--[[
+	Throw the egg. Called by CombatService AFTER it has validated the request
+	(caller must be the carrier, alive, not stunned).
+
+	EggService.ReleaseThrow(player, direction)
+	  player    : the current carrier
+	  direction : Vector3 launch direction (unit-ized internally); the lob comes
+	              from Config.ThrowUpwardBias added on top of Config.ThrowSpeed
+
+	Possession ends immediately (hold time stops). The egg is "hot" for
+	Config.EggThrowDangerTime / until it slows below Config.EggThrowImpactMinSpeed:
+	hitting a player knocks them back and bounces the egg loose instead of being
+	caught. The thrower is locked out of re-grabbing (ThrowSelfPickupDelay).
+]]
+function EggService.ReleaseThrow(player, direction)
+	if carrier ~= player or not egg then
+		return false
+	end
+	if typeof(direction) ~= "Vector3" or direction.Magnitude < 0.001 then
+		direction = Vector3.new(0, 0, -1)
+	end
+	direction = direction.Unit
+
+	local previousCarrier = carrier
+	carrier = nil
+	previousCarrier:SetAttribute("HasEgg", false)
+
+	if carryWeld then
+		carryWeld:Destroy()
+		carryWeld = nil
+	end
+
+	-- The egg is already welded in front of the chest; launch from there.
+	applyLooseVisual()
+	egg.AssemblyAngularVelocity = Vector3.zero
+	egg.AssemblyLinearVelocity = direction * Config.ThrowSpeed
+		+ Vector3.new(0, Config.ThrowUpwardBias, 0)
+
+	state = STATE_LOOSE
+	looseSince = now()
+	thrower = previousCarrier
+	thrownHotUntil = now() + Config.EggThrowDangerTime
+	pickupLockout[previousCarrier] = now() + Config.ThrowSelfPickupDelay
+	broadcastNeeded = true
+
+	broadcastPossession(nil, previousCarrier)
+	broadcastFeedback("EggThrown", {
+		Player = previousCarrier,
+		Direction = direction,
+		Position = egg.Position,
+	})
+
+	if Config.DebugVerboseLogging then
+		print("[EggService] " .. previousCarrier.Name .. " threw the egg")
+	end
+	return true
+end
+
+-- True while a thrown egg would knock players back instead of being caught.
+function EggService.IsEggHot()
+	return isEggHot()
+end
+
+-- Who last threw the egg (Player?) -- used for throw-impact exemptions.
+function EggService.GetThrower()
+	return thrower
+end
+
+-- Main injects CombatService.HandleEggImpact here. Dependency injection keeps
+-- the require graph one-directional (CombatService -> EggService only).
+function EggService.SetImpactHandler(handler)
+	impactHandler = (typeof(handler) == "function") and handler or nil
+end
+
 -- One-line snapshot for the console / DebugCommands "state".
 function EggService.DebugState()
 	local parts = {}
@@ -1154,7 +1953,7 @@ return EggService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="Script" referent="RBX35">
+<Item class="Script" referent="RBX36">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">Main</string>
@@ -1164,20 +1963,35 @@ return EggService
 	Server bootstrap. Runs once when the server starts.
 
 	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service modules. As of Task 2, EggService is LIVE
-	     (egg spawn / auto-pickup / carry / hold time / fumble / respawn);
-	     Match, Combat, Scoring and Data remain documented stubs.
-	  3. Creates ServerScriptService.DebugCommands (BindableEvent) so server
-	     functions can be triggered from the Studio command bar while playing:
+	  2. Initializes the service modules. As of Task 3, EggService AND
+	     CombatService are LIVE (pickup/carry/hold time/fumble/respawn +
+	     attack/throw/block/dash/stamina). Match, Scoring and Data remain
+	     documented stubs.
+	  3. Wires CombatService into EggService as the thrown-egg impact handler
+	     (dependency injection -- keeps the require graph one-directional).
+	  4. Creates the debug bridges (STUDIO ONLY, gated by
+	     Config.DebugAllowCommandBar):
 
-	       game.ServerScriptService.DebugCommands:Fire("fumble")          -- drop the current carrier's egg
-	       game.ServerScriptService.DebugCommands:Fire("fumble", "Name")  -- drop a specific player's egg
-	       game.ServerScriptService.DebugCommands:Fire("respawn_egg")     -- force the egg back to center
-	       game.ServerScriptService.DebugCommands:Fire("state")           -- print egg state + hold times
+	     a) ReplicatedStorage.Remotes.DebugCommand (RemoteEvent) -- use this
+	        from the Studio command bar while PLAYING. The command bar runs in
+	        CLIENT context, which cannot see ServerScriptService children:
+
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "PlayerName")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")
+
+	     b) ServerScriptService.DebugCommands (BindableEvent) -- same commands
+	        from server-side code / "Run" mode:
+
+	          game.ServerScriptService.DebugCommands:Fire("fumble")
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 
 -- 1) Verify remotes (static instances declared in default.project.json)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -1196,6 +2010,8 @@ local EXPECTED_REMOTES = {
 	"RoundEnded",
 	"MatchEnded",
 	"FeedbackEvent",
+	-- studio-only debug bridge (see below)
+	"DebugCommand",
 }
 
 for _, name in EXPECTED_REMOTES do
@@ -1217,16 +2033,17 @@ for _, service in ipairs({ MatchService, EggService, CombatService, ScoringServi
 	end
 end
 
--- 3) Debug commands: a BindableEvent bridge from the Studio command bar into
---    the running server. Works even where the command bar cannot share the
---    game's require() cache.
-local debugCommands = Instance.new("BindableEvent")
-debugCommands.Name = "DebugCommands"
-debugCommands.Parent = ServerScriptService
+-- 3) Cross-service wiring: EggService reports thrown-egg impacts,
+--    CombatService applies the knockback. Injected here so neither module
+--    has to require the other in both directions.
+EggService.SetImpactHandler(function(player, eggVelocity)
+	CombatService.HandleEggImpact(player, eggVelocity)
+end)
 
-debugCommands.Event:Connect(function(command, argument)
+-- 4) Debug bridges (Studio only)
+local function runDebugCommand(command, argument)
 	if typeof(command) ~= "string" then
-		warn('[DebugCommands] usage: Fire("fumble" | "respawn_egg" | "state" [, playerName])')
+		warn('[Debug] usage: "fumble" | "respawn_egg" | "state" [, playerName]')
 		return
 	end
 	command = command:lower()
@@ -1235,17 +2052,41 @@ debugCommands.Event:Connect(function(command, argument)
 	elseif command == "respawn_egg" then
 		EggService.RespawnEggNow()
 	elseif command == "state" then
-		print("[DebugCommands] " .. EggService.DebugState())
+		print("[Debug] egg   : " .. EggService.DebugState())
+		print("[Debug] combat: " .. CombatService.DebugState())
 	else
-		warn('[DebugCommands] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
+		warn('[Debug] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
 	end
+end
+
+-- a) RemoteEvent path -- reachable from the command bar during Play because
+--    ReplicatedStorage replicates to the client. Hard-gated to Studio.
+local debugRemote = Remotes:FindFirstChild("DebugCommand")
+if debugRemote and debugRemote:IsA("RemoteEvent") then
+	debugRemote.OnServerEvent:Connect(function(player, command, argument)
+		if not (RunService:IsStudio() and Config.DebugAllowCommandBar) then
+			return -- never trust debug commands outside Studio
+		end
+		runDebugCommand(command, argument)
+	end)
+else
+	warn("[Main] Remotes.DebugCommand missing -- command-bar debugging unavailable")
+end
+
+-- b) BindableEvent path -- for server-side automation and "Run" mode.
+local debugCommands = Instance.new("BindableEvent")
+debugCommands.Name = "DebugCommands"
+debugCommands.Parent = ServerScriptService
+
+debugCommands.Event:Connect(function(command, argument)
+	runDebugCommand(command, argument)
 end)
 
-print("[Clutch the Egg] Server bootstrap complete -- egg system live (Task 2); match/combat/scoring are stubs")
+print("[Clutch the Egg] Server bootstrap complete -- egg + combat live (Task 3); match/scoring are stubs")
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX36">
+<Item class="ModuleScript" referent="RBX37">
 <Properties>
 	<string name="Name">MatchService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1284,7 +2125,7 @@ return MatchService
 ]]></ProtectedString>
 </Properties>
 </Item>
-<Item class="ModuleScript" referent="RBX37">
+<Item class="ModuleScript" referent="RBX38">
 <Properties>
 	<string name="Name">ScoringService</string>
 	<ProtectedString name="Source"><![CDATA[--[[
@@ -1323,72 +2164,208 @@ return ScoringService
 </Properties>
 </Item>
 </Item>
-<Item class="ServerStorage" referent="RBX38">
+<Item class="ServerStorage" referent="RBX39">
 <Properties>
 	<string name="Name">ServerStorage</string>
 </Properties>
 </Item>
-<Item class="SoundService" referent="RBX39">
+<Item class="SoundService" referent="RBX40">
 <Properties>
 	<string name="Name">Sound</string>
 </Properties>
 </Item>
-<Item class="StarterGui" referent="RBX40">
+<Item class="StarterGui" referent="RBX41">
 <Properties>
 	<string name="Name">StarterGui</string>
 </Properties>
 </Item>
-<Item class="StarterPack" referent="RBX41">
+<Item class="StarterPack" referent="RBX42">
 <Properties>
 	<string name="Name">StarterPack</string>
 </Properties>
 </Item>
-<Item class="StarterPlayer" referent="RBX42">
+<Item class="StarterPlayer" referent="RBX43">
 <Properties>
 	<string name="Name">StarterPlayer</string>
 </Properties>
-<Item class="StarterCharacterScripts" referent="RBX43">
+<Item class="StarterCharacterScripts" referent="RBX44">
 <Properties>
 	<string name="Name">StarterCharacterScripts</string>
 </Properties>
-<Item class="LocalScript" referent="RBX44">
+<Item class="LocalScript" referent="RBX45">
 <Properties>
 	<bool name="Disabled">false</bool>
 	<string name="Name">ClientInput</string>
 	<ProtectedString name="Source"><![CDATA[--[[
 	ClientInput (StarterPlayer.StarterCharacterScripts.ClientInput)
 	===============================================================
-	STATUS: stub -- no input handling yet.
+	Client-side input controller (runs on every character spawn).
 
-	This LocalScript runs every time a character spawns. When input is built
-	it will:
-	  * Bind Attack / Throw / Block / Dash on keyboard, gamepad AND mobile
-	    (on-screen buttons via ContextActionService).
-	  * Fire the matching Request* RemoteEvent -- it NEVER applies gameplay
-	    locally; the server validates and applies everything.
-	  * Listen to EggPossessionChanged / MatchStateChanged / FeedbackEvent to
-	    drive the HUD and cosmetic feedback later.
+	Philosophy: this script ONLY translates input into Request* RemoteEvent
+	fires. It never applies gameplay locally -- the server validates cooldowns,
+	stamina and the contextual rules (has egg / hands full) and rejects
+	cheaters. The only client-side gating is a soft possession check (don't
+	even send obviously-invalid requests); the server re-checks everything.
+
+	Bindings
+	--------
+	  Attack : Left Mouse, Gamepad X        (only when NOT carrying)
+	  Throw  : Q or F, Gamepad Y            (only when carrying)
+	  Block  : Right Mouse or E (hold), Gamepad L1
+	  Dash   : Left Shift or Space, Gamepad R1
+	           (Space intentionally still jumps too -- air-dashes are legal)
+
+	Mobile: ContextActionService touch buttons are created for all four
+	abilities as a functional placeholder. The real mobile GUI comes in a
+	later prompt and should call the exposed functions below.
+
+	GUI hook (later prompt): the API is exposed on _G for other client
+	scripts (ScreenGui buttons live in a different LocalScript):
+	  _G.CTEInput.Attack()
+	  _G.CTEInput.Throw()
+	  _G.CTEInput.Dash()
+	  _G.CTEInput.Block(true)   -- press
+	  _G.CTEInput.Block(false)  -- release
+
+	TODO(gui): when real buttons exist, consider sinking MouseButton1 here or
+	unbinding it so clicks on the HUD do not also punch.
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ContextActionService = game:GetService("ContextActionService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-
--- Cache the input remotes now so this require-path is validated on every spawn.
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
 local RequestThrow = Remotes:WaitForChild("RequestThrow")
 local RequestDash = Remotes:WaitForChild("RequestDash")
 local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
 local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+local FeedbackEvent = Remotes:WaitForChild("FeedbackEvent")
 
--- TODO(input): ContextActionService bindings -> FireServer() calls go here.
--- Hold onto the locals so linters stay quiet until the bindings exist.
-local _cachedRemotes = { RequestAttack, RequestThrow, RequestDash, RequestBlockStart, RequestBlockEnd }
+local player = Players.LocalPlayer
+
+---------------------------------------------------------------------------
+-- Ability requests (also the public API for the future GUI)
+---------------------------------------------------------------------------
+
+local function attack()
+	-- Soft gate only: the server is authoritative and answers "HandsFull".
+	if player:GetAttribute("HasEgg") then
+		return
+	end
+	RequestAttack:FireServer()
+end
+
+local function throwEgg()
+	-- Soft gate only: the server answers "NotCarrying" if we are wrong.
+	if not player:GetAttribute("HasEgg") then
+		return
+	end
+	RequestThrow:FireServer()
+end
+
+local function dash()
+	RequestDash:FireServer()
+end
+
+-- Block is a HOLD: mouse button + key can overlap, so count the holds and
+-- only tell the server about the first press / final release.
+local blockDepth = 0
+
+local function setBlocking(blocking)
+	if blocking then
+		blockDepth = blockDepth + 1
+		if blockDepth == 1 then
+			RequestBlockStart:FireServer()
+		end
+	else
+		blockDepth = math.max(0, blockDepth - 1)
+		if blockDepth == 0 then
+			RequestBlockEnd:FireServer()
+		end
+	end
+end
+
+_G.CTEInput = {
+	Attack = attack,
+	Throw = throwEgg,
+	Dash = dash,
+	Block = setBlocking,
+}
+
+---------------------------------------------------------------------------
+-- ContextActionService bindings (keyboard + mouse + gamepad + touch buttons)
+---------------------------------------------------------------------------
+
+local function attackAction(_, inputState)
+	if inputState == Enum.UserInputState.Begin then
+		attack()
+	end
+	return Enum.ContextActionResult.Pass
+end
+
+local function throwAction(_, inputState)
+	if inputState == Enum.UserInputState.Begin then
+		throwEgg()
+	end
+	return Enum.ContextActionResult.Pass
+end
+
+local function blockAction(_, inputState)
+	if inputState == Enum.UserInputState.Begin then
+		setBlocking(true)
+	elseif inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+		setBlocking(false)
+	end
+	return Enum.ContextActionResult.Pass
+end
+
+local function dashAction(_, inputState)
+	if inputState == Enum.UserInputState.Begin then
+		dash()
+	end
+	return Enum.ContextActionResult.Pass -- Pass so Space still jumps (air-dash)
+end
+
+-- createTouchButton = true gives free (ugly) on-screen buttons on mobile
+-- until the real GUI is wired up. Rebinding the same names on respawn
+-- replaces the previous character's bindings.
+ContextActionService:BindAction("CTE_Attack", attackAction, true,
+	Enum.UserInputType.MouseButton1, Enum.KeyCode.ButtonX)
+ContextActionService:BindAction("CTE_Throw", throwAction, true,
+	Enum.KeyCode.Q, Enum.KeyCode.F, Enum.KeyCode.ButtonY)
+ContextActionService:BindAction("CTE_Block", blockAction, true,
+	Enum.UserInputType.MouseButton2, Enum.KeyCode.E, Enum.KeyCode.ButtonL1)
+ContextActionService:BindAction("CTE_Dash", dashAction, true,
+	Enum.KeyCode.LeftShift, Enum.KeyCode.Space, Enum.KeyCode.ButtonR1)
+
+---------------------------------------------------------------------------
+-- Personal feedback (rejection reasons) -- print for now, GUI toast later
+---------------------------------------------------------------------------
+
+local PERSONAL_FEEDBACK = {
+	HandsFull = true,
+	NotCarrying = true,
+	NoStamina = true,
+	OnCooldown = true,
+	Stunned = true,
+	PunchWhiff = true,
+}
+
+FeedbackEvent.OnClientEvent:Connect(function(kind, data)
+	if PERSONAL_FEEDBACK[kind] and Config.DebugVerboseLogging then
+		local ability = type(data) == "table" and data.Ability or ""
+		print(("[CTE] %s %s"):format(kind, ability)) -- TODO(gui): toast/flash instead
+	end
+end)
 ]]></ProtectedString>
 </Properties>
 </Item>
 </Item>
-<Item class="StarterPlayerScripts" referent="RBX45">
+<Item class="StarterPlayerScripts" referent="RBX46">
 <Properties>
 	<string name="Name">StarterPlayerScripts</string>
 </Properties>

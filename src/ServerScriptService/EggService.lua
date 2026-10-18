@@ -13,16 +13,22 @@
 	            lost. (Later, MatchService calls StartRound()/EndRound().)
 	Pickup    : Loose egg + character touch (or proximity scan backup) ->
 	            that player becomes the carrier. No button. The egg is welded
-	            in front of the torso, CanCollide/CanTouch turn off, the
-	            carrier's WalkSpeed drops to Config.CarrySpeed and the Player
-	            gets attribute HasEgg = true.
+	            in front of the torso, CanCollide/CanTouch turn off and the
+	            Player gets attribute HasEgg = true. NOTE: the carry speed
+	            penalty (Config.CarrySpeed) is applied by CombatService, which
+	            owns all WalkSpeed math (carry/block/dash/stun modifiers).
 	Hold time : The current carrier accrues seconds on the service ticker.
 	            HoldTimeUpdated broadcasts every Config.HoldTimeSyncInterval
 	            (only while carried, plus one final push after changes).
 	Fumble    : EggService.Fumble(target, reason [, popVelocity]) detaches
-	            the egg, drops it loose at the carrier's position, restores
-	            WalkSpeed, clears HasEgg. Also fires automatically on death,
-	            respawn and leaving the game.
+	            the egg, drops it loose at the carrier's position, clears
+	            HasEgg. Also fires automatically on death, respawn and
+	            leaving the game.
+	Throw     : EggService.ReleaseThrow(player, direction) launches the egg
+	            (CombatService validates the request first). For a short
+	            window the thrown egg is "hot": it knocks players back and
+	            bounces loose instead of being caught; once it slows down it
+	            is a normal loose egg again (loose-pickup only for now).
 	Loose egg : Unclaimed for Config.EggRespawnDelay while away from the
 	            center pad, OR out of bounds (below Config.EggOutOfBoundsY /
 	            past Config.EggOutOfBoundsHorizontal) -> respawns at center.
@@ -34,15 +40,15 @@
 	HoldTimeUpdated(entries)  -- array of {Player = Player, HoldTime = number},
 	                          -- sorted by HoldTime descending (leaderboard order)
 	FeedbackEvent(kind, data) -- kinds fired here: "EggPickup", "EggFumble",
-	                          -- "EggOutOfBounds", "EggRespawn"
+	                          -- "EggOutOfBounds", "EggRespawn", "EggThrown",
+	                          -- "EggImpact"
 
-	Debugging from the Studio command bar while playing:
-	  require(game:GetService("ServerScriptService").EggService).Fumble()
-	  -- or via the BindableEvent created by Main: --
-	  game:GetService("ServerScriptService").DebugCommands:Fire("fumble")
-	  game:GetService("ServerScriptService").DebugCommands:Fire("fumble", "PlayerName")
-	  game:GetService("ServerScriptService").DebugCommands:Fire("respawn_egg")
-	  game:GetService("ServerScriptService").DebugCommands:Fire("state")
+	Debugging from the Studio command bar while playing (the command bar runs
+	in CLIENT context, so use the DebugCommand remote in ReplicatedStorage):
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "PlayerName")
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")
+	  game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")
 ]]
 
 local Players = game:GetService("Players")
@@ -79,6 +85,9 @@ local holdTimes = {}             -- { [Player] = seconds }
 local pickupLockout = {}         -- { [Player] = os.clock() earliest re-grab }
 local looseSince = nil           -- os.clock() when the egg became loose
 local respawnAt = nil            -- os.clock() when STATE_RESPAWNING completes
+local thrower = nil              -- Player? who last threw the egg (self-pickup lockout)
+local thrownHotUntil = 0         -- os.clock() deadline for the thrown egg's impact window
+local impactHandler = nil        -- function(player, eggVelocity) injected by Main (CombatService)
 local broadcastNeeded = false    -- push one more HoldTimeUpdated after a change
 local lastTickTime = 0
 local initialized = false
@@ -128,6 +137,15 @@ end
 local function broadcastPossession(newCarrier, previousCarrier)
 	broadcastNeeded = true
 	EggPossessionChanged:FireAllClients(newCarrier, previousCarrier)
+end
+
+-- A thrown egg stays "hot" for a short window (and while still fast): it
+-- knocks players back instead of being picked up.
+local function isEggHot()
+	return state == STATE_LOOSE
+		and egg ~= nil
+		and thrownHotUntil > now()
+		and egg.AssemblyLinearVelocity.Magnitude >= Config.EggThrowImpactMinSpeed
 end
 
 local function createEgg()
@@ -203,6 +221,8 @@ local function spawnAtCenter()
 	state = STATE_LOOSE
 	looseSince = now()
 	respawnAt = nil
+	thrower = nil
+	thrownHotUntil = 0
 	pickupLockout = {} -- fresh center drop: everyone may contest it
 	broadcastNeeded = true
 
@@ -246,7 +266,12 @@ local function tryPickup(player)
 
 	local lockUntil = pickupLockout[player]
 	if lockUntil and now() < lockUntil then
-		return false -- just fumbled/threw it: cannot instantly re-grab
+		return false -- just fumbled/threw it or just got beaned: cannot instantly re-grab
+	end
+
+	-- A hot thrown egg is not catchable (yet) -- it impacts instead.
+	if isEggHot() and player ~= thrower then
+		return false
 	end
 
 	local character = player.Character
@@ -272,9 +297,8 @@ local function tryPickup(player)
 	carryWeld.Part1 = egg
 	carryWeld.Parent = egg
 
-	-- Carry penalty: slower movement while holding.
-	humanoid.WalkSpeed = Config.CarrySpeed
-
+	-- Carry penalty (Config.CarrySpeed) is applied by CombatService, which
+	-- watches the HasEgg attribute and owns all WalkSpeed math.
 	player:SetAttribute("HasEgg", true)
 	if holdTimes[player] == nil then
 		holdTimes[player] = 0
@@ -290,14 +314,30 @@ local function tryPickup(player)
 end
 
 local function onEggTouched(hit)
-	if state ~= STATE_LOOSE then
+	if state ~= STATE_LOOSE or not egg then
 		return
 	end
 	local character = hit:FindFirstAncestorOfClass("Model")
 	local player = character and Players:GetPlayerFromCharacter(character)
-	if player then
-		tryPickup(player)
+	if not player then
+		return
 	end
+
+	-- Hot thrown egg: knock the struck player back (via the injected
+	-- CombatService handler), defuse the egg and bounce it loose.
+	if isEggHot() and player ~= thrower then
+		local impactVelocity = egg.AssemblyLinearVelocity
+		thrownHotUntil = 0 -- defuse: it is a normal loose egg again
+		pickupLockout[player] = now() + Config.EggImpactPickupDelay
+		egg.AssemblyLinearVelocity = impactVelocity * -0.2 + Vector3.new(0, 5, 0)
+		broadcastFeedback("EggImpact", { Player = player, Position = egg.Position })
+		if impactHandler then
+			impactHandler(player, impactVelocity)
+		end
+		return
+	end
+
+	tryPickup(player)
 end
 
 ---------------------------------------------------------------------------
@@ -312,18 +352,15 @@ local function doFumble(player, reason, popVelocity)
 	carrier = nil
 
 	previousCarrier:SetAttribute("HasEgg", false)
-
-	-- Restore walk speed if the character is still alive.
-	local humanoid = getAliveHumanoid(previousCarrier.Character)
-	if humanoid then
-		humanoid.WalkSpeed = Config.WalkSpeed
-	end
+	-- WalkSpeed restoration happens in CombatService (HasEgg attribute watch).
 
 	-- Detach from the torso.
 	if carryWeld then
 		carryWeld:Destroy()
 		carryWeld = nil
 	end
+	thrower = nil
+	thrownHotUntil = 0
 
 	-- Place the egg loose at the carrier's position (slightly forward+up so
 	-- it does not spawn inside the character), clamped inside the arena so a
@@ -375,10 +412,8 @@ local function bindCharacter(player, character)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 		or character:WaitForChild("Humanoid", 10)
 	if humanoid then
-		-- Config is the source of truth for base speed on every (re)spawn.
-		-- TODO(combat): CombatService will later layer block/dash modifiers on top.
-		humanoid.WalkSpeed = Config.WalkSpeed
-
+		-- Base WalkSpeed on (re)spawn is applied by CombatService, which owns
+		-- all speed modifiers (carry / block / dash / stun).
 		humanoid.Died:Connect(function()
 			doFumble(player, "Died")
 		end)
@@ -635,6 +670,80 @@ function EggService.RespawnEggNow()
 		doFumble(carrier, "ForcedRespawn")
 	end
 	spawnAtCenter()
+end
+
+--[[
+	Throw the egg. Called by CombatService AFTER it has validated the request
+	(caller must be the carrier, alive, not stunned).
+
+	EggService.ReleaseThrow(player, direction)
+	  player    : the current carrier
+	  direction : Vector3 launch direction (unit-ized internally); the lob comes
+	              from Config.ThrowUpwardBias added on top of Config.ThrowSpeed
+
+	Possession ends immediately (hold time stops). The egg is "hot" for
+	Config.EggThrowDangerTime / until it slows below Config.EggThrowImpactMinSpeed:
+	hitting a player knocks them back and bounces the egg loose instead of being
+	caught. The thrower is locked out of re-grabbing (ThrowSelfPickupDelay).
+]]
+function EggService.ReleaseThrow(player, direction)
+	if carrier ~= player or not egg then
+		return false
+	end
+	if typeof(direction) ~= "Vector3" or direction.Magnitude < 0.001 then
+		direction = Vector3.new(0, 0, -1)
+	end
+	direction = direction.Unit
+
+	local previousCarrier = carrier
+	carrier = nil
+	previousCarrier:SetAttribute("HasEgg", false)
+
+	if carryWeld then
+		carryWeld:Destroy()
+		carryWeld = nil
+	end
+
+	-- The egg is already welded in front of the chest; launch from there.
+	applyLooseVisual()
+	egg.AssemblyAngularVelocity = Vector3.zero
+	egg.AssemblyLinearVelocity = direction * Config.ThrowSpeed
+		+ Vector3.new(0, Config.ThrowUpwardBias, 0)
+
+	state = STATE_LOOSE
+	looseSince = now()
+	thrower = previousCarrier
+	thrownHotUntil = now() + Config.EggThrowDangerTime
+	pickupLockout[previousCarrier] = now() + Config.ThrowSelfPickupDelay
+	broadcastNeeded = true
+
+	broadcastPossession(nil, previousCarrier)
+	broadcastFeedback("EggThrown", {
+		Player = previousCarrier,
+		Direction = direction,
+		Position = egg.Position,
+	})
+
+	if Config.DebugVerboseLogging then
+		print("[EggService] " .. previousCarrier.Name .. " threw the egg")
+	end
+	return true
+end
+
+-- True while a thrown egg would knock players back instead of being caught.
+function EggService.IsEggHot()
+	return isEggHot()
+end
+
+-- Who last threw the egg (Player?) -- used for throw-impact exemptions.
+function EggService.GetThrower()
+	return thrower
+end
+
+-- Main injects CombatService.HandleEggImpact here. Dependency injection keeps
+-- the require graph one-directional (CombatService -> EggService only).
+function EggService.SetImpactHandler(handler)
+	impactHandler = (typeof(handler) == "function") and handler or nil
 end
 
 -- One-line snapshot for the console / DebugCommands "state".

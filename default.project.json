@@ -29,7 +29,8 @@
 				"MatchStateChanged": { "$className": "RemoteEvent" },
 				"RoundEnded": { "$className": "RemoteEvent" },
 				"MatchEnded": { "$className": "RemoteEvent" },
-				"FeedbackEvent": { "$className": "RemoteEvent" }
+				"FeedbackEvent": { "$className": "RemoteEvent" },
+				"DebugCommand": { "$className": "RemoteEvent" }
 			}
 		},
 

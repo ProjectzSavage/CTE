@@ -155,7 +155,7 @@ def main() -> int:
 EXPECTED_REMOTES = [
     "RequestAttack", "RequestThrow", "RequestDash", "RequestBlockStart", "RequestBlockEnd",
     "EggPossessionChanged", "HoldTimeUpdated", "MatchStateChanged", "RoundEnded",
-    "MatchEnded", "FeedbackEvent",
+    "MatchEnded", "FeedbackEvent", "DebugCommand",
 ]
 
 

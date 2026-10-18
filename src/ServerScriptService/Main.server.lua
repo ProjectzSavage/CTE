@@ -4,20 +4,35 @@
 	Server bootstrap. Runs once when the server starts.
 
 	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service modules. As of Task 2, EggService is LIVE
-	     (egg spawn / auto-pickup / carry / hold time / fumble / respawn);
-	     Match, Combat, Scoring and Data remain documented stubs.
-	  3. Creates ServerScriptService.DebugCommands (BindableEvent) so server
-	     functions can be triggered from the Studio command bar while playing:
+	  2. Initializes the service modules. As of Task 3, EggService AND
+	     CombatService are LIVE (pickup/carry/hold time/fumble/respawn +
+	     attack/throw/block/dash/stamina). Match, Scoring and Data remain
+	     documented stubs.
+	  3. Wires CombatService into EggService as the thrown-egg impact handler
+	     (dependency injection -- keeps the require graph one-directional).
+	  4. Creates the debug bridges (STUDIO ONLY, gated by
+	     Config.DebugAllowCommandBar):
 
-	       game.ServerScriptService.DebugCommands:Fire("fumble")          -- drop the current carrier's egg
-	       game.ServerScriptService.DebugCommands:Fire("fumble", "Name")  -- drop a specific player's egg
-	       game.ServerScriptService.DebugCommands:Fire("respawn_egg")     -- force the egg back to center
-	       game.ServerScriptService.DebugCommands:Fire("state")           -- print egg state + hold times
+	     a) ReplicatedStorage.Remotes.DebugCommand (RemoteEvent) -- use this
+	        from the Studio command bar while PLAYING. The command bar runs in
+	        CLIENT context, which cannot see ServerScriptService children:
+
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("fumble", "PlayerName")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("respawn_egg")
+	          game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")
+
+	     b) ServerScriptService.DebugCommands (BindableEvent) -- same commands
+	        from server-side code / "Run" mode:
+
+	          game.ServerScriptService.DebugCommands:Fire("fumble")
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 
 -- 1) Verify remotes (static instances declared in default.project.json)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -36,6 +51,8 @@ local EXPECTED_REMOTES = {
 	"RoundEnded",
 	"MatchEnded",
 	"FeedbackEvent",
+	-- studio-only debug bridge (see below)
+	"DebugCommand",
 }
 
 for _, name in EXPECTED_REMOTES do
@@ -57,16 +74,17 @@ for _, service in ipairs({ MatchService, EggService, CombatService, ScoringServi
 	end
 end
 
--- 3) Debug commands: a BindableEvent bridge from the Studio command bar into
---    the running server. Works even where the command bar cannot share the
---    game's require() cache.
-local debugCommands = Instance.new("BindableEvent")
-debugCommands.Name = "DebugCommands"
-debugCommands.Parent = ServerScriptService
+-- 3) Cross-service wiring: EggService reports thrown-egg impacts,
+--    CombatService applies the knockback. Injected here so neither module
+--    has to require the other in both directions.
+EggService.SetImpactHandler(function(player, eggVelocity)
+	CombatService.HandleEggImpact(player, eggVelocity)
+end)
 
-debugCommands.Event:Connect(function(command, argument)
+-- 4) Debug bridges (Studio only)
+local function runDebugCommand(command, argument)
 	if typeof(command) ~= "string" then
-		warn('[DebugCommands] usage: Fire("fumble" | "respawn_egg" | "state" [, playerName])')
+		warn('[Debug] usage: "fumble" | "respawn_egg" | "state" [, playerName]')
 		return
 	end
 	command = command:lower()
@@ -75,10 +93,34 @@ debugCommands.Event:Connect(function(command, argument)
 	elseif command == "respawn_egg" then
 		EggService.RespawnEggNow()
 	elseif command == "state" then
-		print("[DebugCommands] " .. EggService.DebugState())
+		print("[Debug] egg   : " .. EggService.DebugState())
+		print("[Debug] combat: " .. CombatService.DebugState())
 	else
-		warn('[DebugCommands] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
+		warn('[Debug] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
 	end
+end
+
+-- a) RemoteEvent path -- reachable from the command bar during Play because
+--    ReplicatedStorage replicates to the client. Hard-gated to Studio.
+local debugRemote = Remotes:FindFirstChild("DebugCommand")
+if debugRemote and debugRemote:IsA("RemoteEvent") then
+	debugRemote.OnServerEvent:Connect(function(player, command, argument)
+		if not (RunService:IsStudio() and Config.DebugAllowCommandBar) then
+			return -- never trust debug commands outside Studio
+		end
+		runDebugCommand(command, argument)
+	end)
+else
+	warn("[Main] Remotes.DebugCommand missing -- command-bar debugging unavailable")
+end
+
+-- b) BindableEvent path -- for server-side automation and "Run" mode.
+local debugCommands = Instance.new("BindableEvent")
+debugCommands.Name = "DebugCommands"
+debugCommands.Parent = ServerScriptService
+
+debugCommands.Event:Connect(function(command, argument)
+	runDebugCommand(command, argument)
 end)
 
-print("[Clutch the Egg] Server bootstrap complete -- egg system live (Task 2); match/combat/scoring are stubs")
+print("[Clutch the Egg] Server bootstrap complete -- egg + combat live (Task 3); match/scoring are stubs")

@@ -64,6 +64,12 @@ Config.DashCooldownCarrying = 2.5
 Config.DashStaminaCostCarrying = 30
 Config.DashIFramesCarrying = 0
 
+-- Carrier dash collisions (Config.EggDropOnDashCollision): dashing into a
+-- player fumbles the egg and bumps the victim a little.
+Config.DashCollisionRadius = 4     -- studs between torsos that counts as a dash hit
+Config.DashCollisionKnockback = 12 -- horizontal push applied to the victim (studs/s)
+Config.DashCollisionUpward = 4
+
 --------------------------------------------------------------------------
 -- Attack (punch -- enabled ONLY when NOT holding the egg; "HANDS FULL" otherwise)
 --------------------------------------------------------------------------
@@ -74,6 +80,7 @@ Config.AttackUpwardKnockback = 8 -- small pop-up so hits feel chunky
 Config.AttackCooldown = 0.6      -- seconds
 Config.AttackStaminaCost = 10
 Config.AttackHitstun = 0.25      -- brief control loss for the victim
+Config.AttackFacingDot = 0       -- min dot(facing, to-victim); 0 = whole forward hemisphere
 
 --------------------------------------------------------------------------
 -- Throw (enabled ONLY while holding the egg)
@@ -115,6 +122,16 @@ Config.EggOutOfBoundsHorizontal = 70  -- beyond this |X|/|Z| counts as out of th
 Config.EggLooseResetRadius = 8        -- unclaimed egg farther than this from center resets to center
 Config.EggFumblePop = 4               -- gentle upward velocity when a fumble drops the egg (studs/s)
 
+-- Thrown-egg impact: for a short window a thrown egg is "hot" -- it knocks
+-- players back and bounces loose instead of being caught (loose-pickup only
+-- in this version; team catches come later).
+Config.EggThrowDangerTime = 0.8       -- hot window after release (seconds)
+Config.EggThrowImpactMinSpeed = 18    -- below this speed a thrown egg stops being dangerous
+Config.EggThrowImpactKnockback = 14   -- horizontal knockback to the struck player (studs/s)
+Config.EggThrowImpactUpward = 6
+Config.EggThrowImpactStun = 0.15      -- brief stagger when a thrown egg hits you
+Config.EggImpactPickupDelay = 0.5     -- the struck player cannot grab the egg for this long
+
 --------------------------------------------------------------------------
 -- Arena (documents the BUILT geometry -- keep in sync with tools/gen_arena.py)
 --------------------------------------------------------------------------
@@ -130,5 +147,6 @@ Config.ArenaEggSpawnHeight = 3    -- Y of the Workspace.Arena.EggSpawnPoint mark
 -- Debug
 --------------------------------------------------------------------------
 Config.DebugVerboseLogging = true -- services log lifecycle events when true
+Config.DebugAllowCommandBar = true -- DebugCommand remote works in Studio only (never in production)
 
 return Config
