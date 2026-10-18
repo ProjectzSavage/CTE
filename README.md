@@ -15,11 +15,15 @@ it respawns at the center after 3 seconds and hold time pauses.
 
 ---
 
-## Current status: Task 4 — FULL MATCH LOOP is LIVE
+## Current status: Task 5 — FULL GUI is LIVE
 
 Open **[`ClutchTheEgg.rbxlx`](ClutchTheEgg.rbxlx)** in Roblox Studio, press
 **Test → Local Server → 2 players** (a match needs 2+; solo F5 waits in the
-lobby by design). The server runs:
+lobby by design). You now get the **whole playable UI**: lobby screen,
+in-match HUD (timer, hold-time board, ability buttons, stamina bar, steal
+feed), round-end / match-end results panels and a settings overlay — all
+driven purely by the existing remotes and replicated attributes. The server
+runs:
 
 ```
 Lobby (2+ of 6 players) -> Countdown (3..2..1) -> RoundPlaying (75s)
@@ -29,7 +33,7 @@ Lobby (2+ of 6 players) -> Countdown (3..2..1) -> RoundPlaying (75s)
 
 Round winners, per-round standings, the MVP and final standings are **printed
 to the server Output** and fired over `RoundEnded` / `MatchEnded` /
-`MatchStateChanged` remotes for the future GUI.
+`MatchStateChanged` remotes — the GUI consumes them directly.
 
 **Fast testing:** set `Config.DebugQuickMatch = true` → 15-second rounds
 (a full 3-round match takes ~1 minute instead of ~4.5).
@@ -44,8 +48,32 @@ to the server Output** and fired over `RoundEnded` / `MatchEnded` /
 | Dash | **E** | R1 | CAS touch button (placeholder) |
 | Sprint (hold — drains stamina) | **Left Shift** | R2 | CAS touch button (placeholder) |
 
-Space is pure jump again. The real mobile GUI comes later and should call
-`_G.CTEInput.Attack() / .Throw() / .Dash() / .Block(bool) / .Sprint(bool)`.
+Space is pure jump again. The in-game GUI ability buttons (ATTACK / THROW /
+BLOCK / DASH) call `_G.CTEInput.Attack() / .Throw() / .Dash() / .Block(bool)`
+— the same path as the keyboard, so the server stays the single authority.
+(Sprint remains keyboard/gamepad-only for now.)
+
+### GUI (`StarterGui.CTEGui`)
+
+One `ScreenGui` (**`ResetOnSpawn = false`**) holds a `GuiMain` LocalScript
+plus five ModuleScripts. Everything is built in code with `UiKit`, uses
+**Scale-only sizing + `TextScaled`** (mobile-friendly — no offsets), and is
+styled from a single `UiKit.Theme` table so the later restyle is one file.
+
+| Screen | What it shows | Driven by |
+| --- | --- | --- |
+| **Lobby** | Title, PLAY button (auto-start hint), mode selector (FFA live, 2v2v2 = "soon" placeholder toast), `Players: X/6` count, SET button, controls hint | `MatchStateChanged` (Lobby payload / client player count) |
+| **HUD** | Big center-top round timer + `Round 1/3`, 3-2-1-GO countdown overlay, 6-row hold-time board (sorted desc, relative fill bars, gold highlight + `(you)` for the carrier), stamina bar (red under 25%), steal/event feed | `MatchStateChanged` ticks, `HoldTimeUpdated`, `EggPossessionChanged`, `Stamina` attribute |
+| **Ability buttons** | ATTACK / THROW / BLOCK(hold) / DASH → `_G.CTEInput`; contextual greys: *Hands Full* (attack while carrying), *Need Egg* (throw without), *No Stamina* (dash below carry-aware cost); cooldown wipe overlay from success feedback (`PunchSwing`, `DashStart`) so keyboard users see it too | `HasEgg`/`Stamina` attributes, `FeedbackEvent`, `Config` cooldowns (display only) |
+| **Round end** | Winner line (or tie / no-winner) + ranked rows: round time, match total, rounds won; winner row gold | `RoundEnded` payload |
+| **Match end** | ★ MVP banner, final standings (incl. `left` ghosts), PLAY AGAIN / BACK TO LOBBY buttons (close the panel — server flow is automatic) | `MatchEnded` payload |
+| **Settings** | Mute toggle (sets `SoundService.Volume`), sensitivity stepper (**placeholder** → `_G.CTESettings`), opens from lobby + HUD SET buttons | — |
+
+**No game logic lives in the GUI** — it only renders remote/attribute state
+and forwards button presses through `_G.CTEInput`. **Late joiners** are
+resynced by the server: `MatchService.resyncPlayer` re-fires the current
+state (+ live round `TimeLeft`) to each joining player 2s after join, and
+`EggService` re-broadcasts hold times on the next bind.
 
 ### Animations (wired, awaiting assets)
 
@@ -110,6 +138,25 @@ game.ReplicatedStorage.Remotes.DebugCommand:FireServer("state")           -- mat
    shows as `left match` in the final standings.
 6. Sprint with Shift → faster, stamina drops; hold until 0 → `Exhausted`,
    walk speed back to normal, regen resumes.
+
+**GUI checklist (same session, look at either client):**
+
+1. Lobby shows title, PLAY, FFA/2v2v2, correct `Players: X/6`, SET opens
+   settings (mute actually silences, sensitivity stepper is a placeholder).
+2. Countdown → big **3…2…1…GO!** overlay; round starts → center-top timer
+   counts down, `Round 1/3` label correct.
+3. Grab the egg → your row highlights gold on **both** clients, timer rows
+   sort by hold time, ATTACK greys to *Hands Full* for the carrier while
+   THROW greys to *Need Egg* for everyone else.
+4. Steal → feed shows "**X stole the egg from Y!**"; punch/dash buttons show
+   the cooldown wipe when used; stamina bar drains on sprint/dash and DASH
+   greys to *No Stamina* when it dips below cost.
+5. Round expires → round-end panel with winner + ranked times; next round
+   replaces it. After round 3 → match-end panel with ★ MVP banner, final
+   standings (ghost leavers tagged `left`), PLAY AGAIN / BACK TO LOBBY.
+6. **Mobile:** Test → Local Server → device emulator (or Emulator → phone
+   preset) → everything stays on-screen and tappable; the four ability
+   buttons fire real attacks/throws/blocks/dashes.
 
 ### Remote payload contracts (server → all clients)
 
@@ -195,6 +242,12 @@ rojo build -o ClutchTheEgg.rbxlx
 | `src/ServerScriptService/DataService.lua`            | `ServerScriptService.DataService` (reserved)     | ModuleScript  |
 | `src/StarterPlayer/StarterCharacterScripts/ClientInput.client.lua` | `…StarterCharacterScripts.ClientInput` (**implemented**) | LocalScript |
 | `src/StarterPlayer/StarterCharacterScripts/Animations.client.lua` | `…StarterCharacterScripts.Animations` (**implemented**) | LocalScript |
+| `src/StarterGui/CTEGui/GuiMain.client.lua`           | `StarterGui.CTEGui.GuiMain` (**implemented**)    | LocalScript |
+| `src/StarterGui/CTEGui/UiKit.lua`                    | `StarterGui.CTEGui.UiKit` (theme + builders)     | ModuleScript |
+| `src/StarterGui/CTEGui/LobbyScreen.lua`              | `StarterGui.CTEGui.LobbyScreen`                  | ModuleScript |
+| `src/StarterGui/CTEGui/HudScreen.lua`                | `StarterGui.CTEGui.HudScreen`                    | ModuleScript |
+| `src/StarterGui/CTEGui/ResultsScreens.lua`           | `StarterGui.CTEGui.ResultsScreens`               | ModuleScript |
+| `src/StarterGui/CTEGui/SettingsPanel.lua`            | `StarterGui.CTEGui.SettingsPanel`                | ModuleScript |
 | `src/Workspace/Arena.rbxmx`                          | `Workspace.Arena` (generated by `tools/gen_arena.py`) | Model    |
 | `ClutchTheEgg.rbxlx`                                 | the runnable place file (build artifact)         | —             |
 
@@ -235,10 +288,10 @@ Geometry constants live in `tools/gen_arena.py` and are documented by the
 - [x] Match: lobby → countdown → 3×75 s rounds → MVP + standings; scoring
       bookkeeping; sprint stamina sink; E/Shift rebinds; animation wiring
       (Task 4)
-- [ ] GUI: HUD — round clock + state (`MatchStateChanged`), hold-time
-      leaderboard (`HoldTimeUpdated`), round/match results screens
-      (`RoundEnded`/`MatchEnded`), stamina bar (`Stamina` attribute), real
-      mobile buttons (`_G.CTEInput`), feedback toasts (`FeedbackEvent`)
+- [x] GUI (Task 5): lobby screen, HUD (round clock, hold-time board, ability
+      buttons with contextual states + cooldown wipes, stamina bar, steal
+      feed), round/match results screens, settings panel — all remote-driven,
+      Scale-only, mobile-friendly
 - [ ] Data: persistence (wins, MVPs) via DataService
 - [ ] Polish: egg mesh, VFX/SFX via `FeedbackEvent` hooks, upload animations
       into `Config.Animations`, line-of-sight for proximity pickup, team mode

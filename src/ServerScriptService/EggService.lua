@@ -426,6 +426,7 @@ end
 
 local function bindPlayer(player)
 	player:SetAttribute("HasEgg", false)
+	broadcastNeeded = true -- late joiner: push the current hold-time table once
 
 	player.CharacterAdded:Connect(function(character)
 		bindCharacter(player, character)

@@ -90,8 +90,17 @@ def build_item(name: str, node: dict) -> Item:
     class_name = node.get("$className", "Folder")
     item = make_simple(name, class_name)
 
-    if "$properties" in node:
-        raise NotImplementedError("$properties is not supported by this builder")
+    for prop_name, value in node.get("$properties", {}).items():
+        if isinstance(value, bool):
+            item.bool(prop_name, value)
+        elif isinstance(value, int):
+            item.int(prop_name, value)
+        elif isinstance(value, float):
+            item.float(prop_name, value)
+        elif isinstance(value, str):
+            item.string(prop_name, value)
+        else:
+            raise ValueError(f"Unsupported $properties type for {name}.{prop_name}")
 
     if "$path" in node:
         for child in materialize_path(os.path.join(REPO_ROOT, node["$path"])):
@@ -230,6 +239,24 @@ def validate(root: ET.Element) -> list[str]:
                          ("LocalScript", "ClientInput")])
     if client_input is None:
         problems.append("StarterCharacterScripts/ClientInput LocalScript missing")
+
+    # GUI: ScreenGui with controller + screen modules
+    cte_gui = find([("StarterGui", None), ("ScreenGui", "CTEGui")])
+    if cte_gui is None:
+        problems.append("StarterGui/CTEGui ScreenGui missing")
+    else:
+        reset = cte_gui.find("./Properties/bool[@name='ResetOnSpawn']")
+        if reset is None or reset.text != "false":
+            problems.append("CTEGui ScreenGui must have ResetOnSpawn=false")
+        gui_names = {
+            item.find("./Properties/string[@name='Name']").text: item.get("class")
+            for item in cte_gui.findall("Item")
+        }
+        if gui_names.get("GuiMain") != "LocalScript":
+            problems.append("CTEGui/GuiMain must be a LocalScript")
+        for module in ("UiKit", "LobbyScreen", "HudScreen", "ResultsScreens", "SettingsPanel"):
+            if gui_names.get(module) != "ModuleScript":
+                problems.append(f"CTEGui/{module} must be a ModuleScript")
 
     # Arena: model, 6 spawns, egg marker
     arena = find([("Workspace", None), ("Model", "Arena")])

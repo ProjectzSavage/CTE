@@ -64,6 +64,8 @@ local MatchService = {}
 local currentState = "Boot"
 local currentRound = 0
 local loopStarted = false
+local lastStateData = nil -- last payload sent with setState (for late-joiner resync)
+local roundDeadline = nil -- os.clock() deadline of the running round (for resync TimeLeft)
 
 local function now()
 	return os.clock()
@@ -82,10 +84,31 @@ end
 
 local function setState(stateName, data)
 	currentState = stateName
+	lastStateData = data
 	MatchStateChanged:FireAllClients(stateName, data or {})
 	if Config.DebugVerboseLogging then
 		print("[Match] State -> " .. stateName)
 	end
+end
+
+-- Late joiners (and clients whose GUI loaded after the last broadcast) get a
+-- one-off resync of the current state shortly after they join.
+local function resyncPlayer(player)
+	task.spawn(function()
+		task.wait(2) -- give the client time to load its GUI scripts
+		if not player.Parent then
+			return
+		end
+		local data = lastStateData
+		if currentState == "RoundPlaying" and roundDeadline then
+			data = {
+				Round = currentRound,
+				RoundsPerMatch = Config.RoundsPerMatch,
+				TimeLeft = math.max(0, math.ceil(roundDeadline - now())),
+			}
+		end
+		MatchStateChanged:FireClient(player, currentState, data or {})
+	end)
 end
 
 ---------------------------------------------------------------------------
@@ -148,6 +171,7 @@ local function playRound(roundNumber)
 	-- Round clock with a 1 Hz broadcast for GUI timers. This fires the remote
 	-- directly (not setState) so the verbose log only shows real transitions.
 	local deadline = now() + length
+	roundDeadline = deadline
 	local lastAnnounced = length
 	while true do
 		local remaining = deadline - now()
@@ -192,6 +216,7 @@ local function playRound(roundNumber)
 		WinnerName = results.WinnerName,
 		NextRoundIn = Config.RoundEndFreeze,
 	})
+	roundDeadline = nil
 	task.wait(Config.RoundEndFreeze)
 end
 
@@ -242,6 +267,8 @@ function MatchService.Init()
 		return
 	end
 	loopStarted = true
+
+	Players.PlayerAdded:Connect(resyncPlayer)
 
 	task.spawn(function()
 		while true do

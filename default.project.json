@@ -50,7 +50,12 @@
 		},
 
 		"StarterGui": {
-			"$className": "StarterGui"
+			"$className": "StarterGui",
+			"CTEGui": {
+				"$className": "ScreenGui",
+				"$properties": { "ResetOnSpawn": false },
+				"$path": "src/StarterGui/CTEGui"
+			}
 		},
 
 		"StarterPack": {
