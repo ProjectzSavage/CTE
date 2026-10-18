@@ -1,0 +1,200 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+<Item class="Model" referent="RBX0">
+<Properties>
+	<string name="Name">Arena</string>
+</Properties>
+<Item class="Part" referent="RBX1">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>-0.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4284902520</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Baseplate</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>128</X><Y>1</Y><Z>128</Z></Vector3>
+	<float name="Transparency">0</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX2">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>2.5</Y><Z>61</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundaryNorth</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>124</X><Y>5</Y><Z>2</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX3">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>2.5</Y><Z>-61</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundarySouth</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>124</X><Y>5</Y><Z>2</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX4">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>61</X><Y>2.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundaryEast</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>2</X><Y>5</Y><Z>120</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX5">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-61</X><Y>2.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundaryWest</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>2</X><Y>5</Y><Z>120</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX6">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">false</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>0</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4294953020</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">CenterPad</string>
+	<token name="shape">2</token>
+	<Vector3 name="size"><X>0.4</X><Y>12</Y><Z>12</Z></Vector3>
+	<float name="Transparency">0</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX7">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">false</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>3</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4291348680</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">EggSpawnPoint</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>1</X><Y>1</Y><Z>1</Z></Vector3>
+	<float name="Transparency">1</float>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX8">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>48</X><Y>0.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4293611600</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn1</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX9">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>24</X><Y>0.5</Y><Z>41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4294286140</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn2</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX10">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-24</X><Y>0.5</Y><Z>41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4294629200</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn3</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX11">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-48</X><Y>0.5</Y><Z>5.878304636e-15</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4284468580</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn4</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX12">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-24</X><Y>0.5</Y><Z>-41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283474160</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn5</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX13">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>24</X><Y>0.5</Y><Z>-41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4290014950</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn6</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+</Item>
+</roblox>

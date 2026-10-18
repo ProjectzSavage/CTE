@@ -1,0 +1,745 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+<Item class="Workspace" referent="RBX0">
+<Properties>
+	<string name="Name">Workspace</string>
+</Properties>
+<Item class="Model" referent="RBX1">
+<Properties>
+	<string name="Name">Arena</string>
+</Properties>
+<Item class="Part" referent="RBX2">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>-0.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4284902520</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Baseplate</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>128</X><Y>1</Y><Z>128</Z></Vector3>
+	<float name="Transparency">0</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX3">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>2.5</Y><Z>61</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundaryNorth</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>124</X><Y>5</Y><Z>2</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX4">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>2.5</Y><Z>-61</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundarySouth</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>124</X><Y>5</Y><Z>2</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX5">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>61</X><Y>2.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundaryEast</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>2</X><Y>5</Y><Z>120</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX6">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-61</X><Y>2.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283489535</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">BoundaryWest</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>2</X><Y>5</Y><Z>120</Z></Vector3>
+	<float name="Transparency">0.35</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX7">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">false</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>0</Y><Z>0</Z><R00>0</R00><R01>-1</R01><R02>0</R02><R10>1</R10><R11>0</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4294953020</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">CenterPad</string>
+	<token name="shape">2</token>
+	<Vector3 name="size"><X>0.4</X><Y>12</Y><Z>12</Z></Vector3>
+	<float name="Transparency">0</float>
+</Properties>
+</Item>
+<Item class="Part" referent="RBX8">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">false</bool>
+	<CoordinateFrame name="CFrame"><X>0</X><Y>3</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4291348680</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">EggSpawnPoint</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>1</X><Y>1</Y><Z>1</Z></Vector3>
+	<float name="Transparency">1</float>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX9">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>48</X><Y>0.5</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4293611600</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn1</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX10">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>24</X><Y>0.5</Y><Z>41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4294286140</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn2</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX11">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-24</X><Y>0.5</Y><Z>41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4294629200</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn3</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX12">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-48</X><Y>0.5</Y><Z>5.878304636e-15</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4284468580</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn4</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX13">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>-24</X><Y>0.5</Y><Z>-41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4283474160</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn5</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+<Item class="SpawnLocation" referent="RBX14">
+<Properties>
+	<bool name="Anchored">true</bool>
+	<bool name="CanCollide">true</bool>
+	<CoordinateFrame name="CFrame"><X>24</X><Y>0.5</Y><Z>-41.56921938</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+	<Color3uint8 name="Color3uint8">4290014950</Color3uint8>
+	<PhysicalProperties name="CustomPhysicalProperties"><CustomPhysics>false</CustomPhysics></PhysicalProperties>
+	<string name="Name">Spawn6</string>
+	<token name="shape">1</token>
+	<Vector3 name="size"><X>6</X><Y>1</Y><Z>6</Z></Vector3>
+	<float name="Transparency">0</float>
+	<bool name="AllowTeamChangeOnTouch">false</bool>
+	<int name="Duration">10</int>
+	<bool name="Enabled">true</bool>
+	<bool name="Neutral">true</bool>
+</Properties>
+</Item>
+</Item>
+</Item>
+<Item class="Lighting" referent="RBX15">
+<Properties>
+	<string name="Name">Lighting</string>
+</Properties>
+</Item>
+<Item class="ReplicatedStorage" referent="RBX16">
+<Properties>
+	<string name="Name">ReplicatedStorage</string>
+</Properties>
+<Item class="Folder" referent="RBX17">
+<Properties>
+	<string name="Name">Modules</string>
+</Properties>
+<Item class="ModuleScript" referent="RBX18">
+<Properties>
+	<string name="Name">Config</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	Config
+	======
+	Single source of truth for EVERY tunable number in Clutch the Egg.
+
+	DataModel location : ReplicatedStorage.Modules.Config  (ModuleScript)
+	Repo location      : src/ReplicatedStorage/Modules/Config.lua
+
+	Rules
+	-----
+	* Gameplay code must never hard-code numbers -- always read them from here.
+	* The client may read this module for HUD/prediction, but the SERVER is the
+	  only authority that acts on it (server-authoritative design).
+	* The Arena* section documents the pre-built geometry that lives in
+	  Workspace.Arena (generated by tools/gen_arena.py). If you change a value
+	  here, regenerate the arena so they stay in sync.
+
+	NOTE: Gameplay is NOT implemented yet. These are the tuned starting values
+	the systems will read once they are built.
+--]]
+
+local Config = {}
+
+--------------------------------------------------------------------------
+-- Match flow
+--------------------------------------------------------------------------
+Config.MaxPlayers = 6            -- hard player cap for the arena
+Config.MinPlayersToStart = 1     -- TODO: raise once matchmaking exists (1 = solo testing)
+Config.RoundLength = 75          -- seconds per round
+Config.RoundsPerMatch = 3        -- best of 3
+Config.RoundsToWinMatch = 2      -- first to 2 round wins takes the match
+Config.RoundStartCountdown = 3   -- "3.. 2.. 1.. GO!" before a round begins
+Config.RoundEndFreeze = 4        -- seconds of post-round results freeze
+Config.IntermissionLength = 8    -- seconds between matches
+
+--------------------------------------------------------------------------
+-- Scoring / hold time
+--------------------------------------------------------------------------
+-- Round winner = most TOTAL hold time in that round.
+-- Match MVP    = most hold time across ALL rounds.
+Config.HoldTimeSyncInterval = 0.1 -- seconds between server HoldTimeUpdated broadcasts
+
+--------------------------------------------------------------------------
+-- Movement
+--------------------------------------------------------------------------
+Config.WalkSpeed = 16            -- empty-handed speed
+Config.CarrySpeed = 12           -- speed while holding the egg
+Config.JumpPower = 50            -- standard Roblox jump
+
+--------------------------------------------------------------------------
+-- Dash (always enabled)
+--------------------------------------------------------------------------
+Config.DashSpeedBonus = 24       -- added on top of current WalkSpeed for the burst
+Config.DashDuration = 0.25       -- seconds
+Config.DashCooldown = 2.5        -- seconds
+Config.DashStaminaCost = 25
+Config.DashIFrames = 0.2         -- invulnerability window while dashing WITHOUT the egg
+
+-- While CARRYING the egg the dash is shorter, grants NO i-frames, and dashing
+-- into a player makes the carrier drop the egg (see EggDropOnDashCollision).
+Config.DashSpeedBonusCarrying = 16
+Config.DashDurationCarrying = 0.15
+Config.DashCooldownCarrying = 2.5
+Config.DashStaminaCostCarrying = 30
+Config.DashIFramesCarrying = 0
+
+--------------------------------------------------------------------------
+-- Attack (punch -- enabled ONLY when NOT holding the egg; "HANDS FULL" otherwise)
+--------------------------------------------------------------------------
+-- Hitting the carrier knocks the egg loose.
+Config.AttackRange = 5           -- studs in front of the attacker
+Config.AttackKnockback = 25      -- horizontal impulse applied to the victim
+Config.AttackUpwardKnockback = 8 -- small pop-up so hits feel chunky
+Config.AttackCooldown = 0.6      -- seconds
+Config.AttackStaminaCost = 10
+Config.AttackHitstun = 0.25      -- brief control loss for the victim
+
+--------------------------------------------------------------------------
+-- Throw (enabled ONLY while holding the egg)
+--------------------------------------------------------------------------
+Config.ThrowSpeed = 60           -- egg launch speed (studs/s)
+Config.ThrowUpwardBias = 12      -- extra vertical component: it is a LOB, not a laser
+Config.ThrowSelfPickupDelay = 0.8 -- thrower cannot re-grab their OWN throw for this long
+
+--------------------------------------------------------------------------
+-- Block (always enabled)
+--------------------------------------------------------------------------
+-- Reduces incoming knockback. While holding the egg you STILL accrue hold
+-- time when blocking, but you move at BlockSpeedMultiplier.
+Config.BlockKnockbackReduction = 0.6 -- fraction of knockback removed (0.6 = 60% less)
+Config.BlockSpeedMultiplier = 0.5    -- 50% move speed while blocking (carrying or not)
+Config.BlockStaminaDrain = 15        -- stamina drained per second while holding block
+
+--------------------------------------------------------------------------
+-- Stamina (shared resource for Dash / Attack / Block)
+--------------------------------------------------------------------------
+Config.StaminaMax = 100
+Config.StaminaRegenPerSecond = 20
+Config.StaminaRegenDelay = 0.75 -- seconds after spending before regen resumes
+
+--------------------------------------------------------------------------
+-- Egg
+--------------------------------------------------------------------------
+Config.EggRadius = 1                  -- simple Part for now (art polish later)
+Config.EggHoldHeight = 2.5            -- offset above the carrier's HumanoidRootPart
+Config.EggRespawnDelay = 3            -- seconds out-of-arena before center respawn
+Config.EggDropOnDashCollision = true  -- carrier dashes into a player -> egg drops
+Config.EggKnockLooseSpeed = 20        -- pop-off speed when the carrier is punched
+Config.EggKnockLooseUpward = 10
+Config.HoldTimePausesWhenLoose = true -- nobody accrues hold time while the egg is loose/respawning
+
+--------------------------------------------------------------------------
+-- Arena (documents the BUILT geometry -- keep in sync with tools/gen_arena.py)
+--------------------------------------------------------------------------
+Config.ArenaFloorSize = 128       -- outer floor slab, studs (playable square is 120x120 inside the walls)
+Config.ArenaPlaySize = 120        -- playable square: wall inner faces sit at +/-60 on X/Z
+Config.ArenaWallHeight = 5
+Config.ArenaWallThickness = 2
+Config.ArenaSpawnRadius = 48      -- distance of the 6 spawn pads from center
+Config.ArenaSpawnCount = 6
+Config.ArenaEggSpawnHeight = 3    -- Y of the Workspace.Arena.EggSpawnPoint marker
+
+--------------------------------------------------------------------------
+-- Debug
+--------------------------------------------------------------------------
+Config.DebugVerboseLogging = true -- services log lifecycle events when true
+
+return Config
+]]></ProtectedString>
+</Properties>
+</Item>
+</Item>
+<Item class="Folder" referent="RBX19">
+<Properties>
+	<string name="Name">Remotes</string>
+</Properties>
+<Item class="RemoteEvent" referent="RBX20">
+<Properties>
+	<string name="Name">RequestAttack</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX21">
+<Properties>
+	<string name="Name">RequestThrow</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX22">
+<Properties>
+	<string name="Name">RequestDash</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX23">
+<Properties>
+	<string name="Name">RequestBlockStart</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX24">
+<Properties>
+	<string name="Name">RequestBlockEnd</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX25">
+<Properties>
+	<string name="Name">EggPossessionChanged</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX26">
+<Properties>
+	<string name="Name">HoldTimeUpdated</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX27">
+<Properties>
+	<string name="Name">MatchStateChanged</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX28">
+<Properties>
+	<string name="Name">RoundEnded</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX29">
+<Properties>
+	<string name="Name">MatchEnded</string>
+</Properties>
+</Item>
+<Item class="RemoteEvent" referent="RBX30">
+<Properties>
+	<string name="Name">FeedbackEvent</string>
+</Properties>
+</Item>
+</Item>
+</Item>
+<Item class="ServerScriptService" referent="RBX31">
+<Properties>
+	<string name="Name">ServerScriptService</string>
+</Properties>
+<Item class="ModuleScript" referent="RBX32">
+<Properties>
+	<string name="Name">CombatService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	CombatService (ServerScriptService.CombatService)
+	=================================================
+	STATUS: stub -- gameplay not implemented yet.
+
+	Future responsibilities
+	-----------------------
+	* Validate RequestAttack on the server: attacker must NOT be holding the
+	  egg ("HANDS FULL" feedback otherwise), plus cooldown / range
+	  (Config.AttackRange) / stamina checks. Apply knockback
+	  (Config.AttackKnockback), reduced by the victim's block
+	  (Config.BlockKnockbackReduction) and negated by dash i-frames.
+	  Hitting the carrier knocks the egg loose (hand off to EggService).
+	* Validate RequestThrow: only while holding the egg; lob it with
+	  Config.ThrowSpeed + Config.ThrowUpwardBias (hand off to EggService).
+	* Validate RequestDash: cooldown / stamina; carrying players get the
+	  shorter no-i-frame dash, and dashing into a player drops the egg.
+	* Track block state (RequestBlockStart / RequestBlockEnd): speed
+	  multiplier, stamina drain, knockback reduction. Blocking while carrying
+	  still accrues hold time (that rule lives in EggService/ScoringService).
+	* Manage the stamina pool (spend + regen) for every player.
+	* Fire FeedbackEvent for every hit / dash / block / "HANDS FULL" deny so
+	  VFX, SFX and GUI polish can hook in later.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
+local CombatService = {}
+
+function CombatService.Init()
+	-- TODO(combat): remote handlers, validation, knockback, stamina.
+	if Config.DebugVerboseLogging then
+		print("[CombatService] stub initialized")
+	end
+end
+
+return CombatService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX33">
+<Properties>
+	<string name="Name">DataService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	DataService (ServerScriptService.DataService)
+	=============================================
+	STATUS: reserved for later -- intentionally empty.
+
+	Future responsibilities
+	-----------------------
+	* ProfileStore/SessionLock persistence (wins, losses, MVPs, cosmetics).
+	* Load on PlayerAdded, save on PlayerRemoving / BindToClose.
+
+	No DataStore calls are made yet (the game is structure-only at this stage
+	and DataStores need a published game + API access enabled).
+]]
+
+local DataService = {}
+
+function DataService.Init()
+	-- TODO(data): persistence, wired up in a later pass.
+	print("[DataService] stub initialized (persistence comes later)")
+end
+
+return DataService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX34">
+<Properties>
+	<string name="Name">EggService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	EggService (ServerScriptService.EggService)
+	===========================================
+	STATUS: stub -- gameplay not implemented yet.
+
+	Future responsibilities
+	-----------------------
+	* Create and own the egg Part on the server (simple Part for now; visuals
+	  are swapped in later via FeedbackEvent hooks).
+	* Auto-pickup on touch (no button): Touched -> server validates -> egg
+	  becomes carried by that player.
+	* Track possession and accrue HOLD TIME (seconds) for the carrier.
+	* Handle throws (lob at Config.ThrowSpeed), knock-loose pops when the
+	  carrier is attacked, and the dash-collision drop rule
+	  (Config.EggDropOnDashCollision).
+	* Egg leaves the arena -> hold time pauses (Config.HoldTimePausesWhenLoose)
+	  and the egg respawns at Workspace.Arena.EggSpawnPoint after
+	  Config.EggRespawnDelay seconds.
+	* Fire EggPossessionChanged / HoldTimeUpdated / FeedbackEvent.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
+local EggService = {}
+
+function EggService.Init()
+	-- TODO(egg): spawn logic, possession state, hold-time accrual.
+	if Config.DebugVerboseLogging then
+		print("[EggService] stub initialized")
+	end
+end
+
+return EggService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="Script" referent="RBX35">
+<Properties>
+	<bool name="Disabled">false</bool>
+	<string name="Name">Main</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	Main (ServerScriptService.Main)
+	===============================
+	Server bootstrap. Runs once when the server starts.
+
+	Right now it only:
+	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
+	  2. Initializes the service stubs, which validates every require-path at
+	     boot instead of at first gameplay use.
+
+	Gameplay is NOT implemented yet -- this prompt delivers structure, arena
+	and config only.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+-- 1) Verify remotes (static instances declared in default.project.json)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local EXPECTED_REMOTES = {
+	-- client -> server (input requests; server validates everything)
+	"RequestAttack",
+	"RequestThrow",
+	"RequestDash",
+	"RequestBlockStart",
+	"RequestBlockEnd",
+	-- server -> client (replicated state + polish hooks)
+	"EggPossessionChanged",
+	"HoldTimeUpdated",
+	"MatchStateChanged",
+	"RoundEnded",
+	"MatchEnded",
+	"FeedbackEvent",
+}
+
+for _, name in EXPECTED_REMOTES do
+	if not Remotes:WaitForChild(name, 10) then
+		warn("[Main] Missing remote: " .. name)
+	end
+end
+
+-- 2) Initialize service modules (stubs for now)
+local SERVICES = {
+	"MatchService",
+	"EggService",
+	"CombatService",
+	"ScoringService",
+	"DataService",
+}
+
+for _, name in SERVICES do
+	local service = require(ServerScriptService:WaitForChild(name))
+	if type(service.Init) == "function" then
+		service.Init()
+	end
+end
+
+print("[Clutch the Egg] Server bootstrap complete -- structure + arena only, gameplay not built yet")
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX36">
+<Properties>
+	<string name="Name">MatchService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	MatchService (ServerScriptService.MatchService)
+	===============================================
+	STATUS: stub -- gameplay not implemented yet.
+
+	Future responsibilities
+	-----------------------
+	* Own the match state machine:
+	    Lobby -> Countdown -> Round (Config.RoundLength seconds)
+	          -> RoundEnd -> (next round | MatchEnd) -> Lobby
+	* Best of Config.RoundsPerMatch rounds; first to Config.RoundsToWinMatch
+	  round wins takes the match.
+	* Broadcast MatchStateChanged / RoundEnded / MatchEnded to all clients.
+	* Coordinate the other services: tell EggService when to spawn/reset the
+	  egg, freeze combat at round end, ask ScoringService for the round winner
+	  (most total hold time) and the match MVP (most hold time across rounds).
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
+local MatchService = {}
+
+function MatchService.Init()
+	-- TODO(match): build the state machine described above.
+	if Config.DebugVerboseLogging then
+		print("[MatchService] stub initialized")
+	end
+end
+
+return MatchService
+]]></ProtectedString>
+</Properties>
+</Item>
+<Item class="ModuleScript" referent="RBX37">
+<Properties>
+	<string name="Name">ScoringService</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	ScoringService (ServerScriptService.ScoringService)
+	===================================================
+	STATUS: stub -- gameplay not implemented yet.
+
+	Future responsibilities
+	-----------------------
+	* Record hold time per player per round (fed by EggService at
+	  Config.HoldTimeSyncInterval).
+	* Round winner = most TOTAL hold time in that round (tie -> shared/no win,
+	  decided when built).
+	* Match MVP = most hold time accumulated across ALL
+	  Config.RoundsPerMatch rounds.
+	* Expose results to MatchService and include them in the RoundEnded /
+	  MatchEnded remote payloads for the GUI.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
+local ScoringService = {}
+
+function ScoringService.Init()
+	-- TODO(scoring): per-round and per-match hold-time bookkeeping.
+	if Config.DebugVerboseLogging then
+		print("[ScoringService] stub initialized")
+	end
+end
+
+return ScoringService
+]]></ProtectedString>
+</Properties>
+</Item>
+</Item>
+<Item class="ServerStorage" referent="RBX38">
+<Properties>
+	<string name="Name">ServerStorage</string>
+</Properties>
+</Item>
+<Item class="SoundService" referent="RBX39">
+<Properties>
+	<string name="Name">Sound</string>
+</Properties>
+</Item>
+<Item class="StarterGui" referent="RBX40">
+<Properties>
+	<string name="Name">StarterGui</string>
+</Properties>
+</Item>
+<Item class="StarterPack" referent="RBX41">
+<Properties>
+	<string name="Name">StarterPack</string>
+</Properties>
+</Item>
+<Item class="StarterPlayer" referent="RBX42">
+<Properties>
+	<string name="Name">StarterPlayer</string>
+</Properties>
+<Item class="StarterCharacterScripts" referent="RBX43">
+<Properties>
+	<string name="Name">StarterCharacterScripts</string>
+</Properties>
+<Item class="LocalScript" referent="RBX44">
+<Properties>
+	<bool name="Disabled">false</bool>
+	<string name="Name">ClientInput</string>
+	<ProtectedString name="Source"><![CDATA[--[[
+	ClientInput (StarterPlayer.StarterCharacterScripts.ClientInput)
+	===============================================================
+	STATUS: stub -- no input handling yet.
+
+	This LocalScript runs every time a character spawns. When input is built
+	it will:
+	  * Bind Attack / Throw / Block / Dash on keyboard, gamepad AND mobile
+	    (on-screen buttons via ContextActionService).
+	  * Fire the matching Request* RemoteEvent -- it NEVER applies gameplay
+	    locally; the server validates and applies everything.
+	  * Listen to EggPossessionChanged / MatchStateChanged / FeedbackEvent to
+	    drive the HUD and cosmetic feedback later.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+-- Cache the input remotes now so this require-path is validated on every spawn.
+local RequestAttack = Remotes:WaitForChild("RequestAttack")
+local RequestThrow = Remotes:WaitForChild("RequestThrow")
+local RequestDash = Remotes:WaitForChild("RequestDash")
+local RequestBlockStart = Remotes:WaitForChild("RequestBlockStart")
+local RequestBlockEnd = Remotes:WaitForChild("RequestBlockEnd")
+
+-- TODO(input): ContextActionService bindings -> FireServer() calls go here.
+-- Hold onto the locals so linters stay quiet until the bindings exist.
+local _cachedRemotes = { RequestAttack, RequestThrow, RequestDash, RequestBlockStart, RequestBlockEnd }
+]]></ProtectedString>
+</Properties>
+</Item>
+</Item>
+<Item class="StarterPlayerScripts" referent="RBX45">
+<Properties>
+	<string name="Name">StarterPlayerScripts</string>
+</Properties>
+</Item>
+</Item>
+</roblox>

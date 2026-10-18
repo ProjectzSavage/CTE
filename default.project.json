@@ -1,0 +1,68 @@
+{
+	"name": "clutch-the-egg",
+	"tree": {
+		"$className": "DataModel",
+
+		"Workspace": {
+			"$className": "Workspace",
+			"$path": "src/Workspace"
+		},
+
+		"Lighting": {
+			"$className": "Lighting"
+		},
+
+		"ReplicatedStorage": {
+			"$className": "ReplicatedStorage",
+			"Modules": {
+				"$path": "src/ReplicatedStorage/Modules"
+			},
+			"Remotes": {
+				"$className": "Folder",
+				"RequestAttack": { "$className": "RemoteEvent" },
+				"RequestThrow": { "$className": "RemoteEvent" },
+				"RequestDash": { "$className": "RemoteEvent" },
+				"RequestBlockStart": { "$className": "RemoteEvent" },
+				"RequestBlockEnd": { "$className": "RemoteEvent" },
+				"EggPossessionChanged": { "$className": "RemoteEvent" },
+				"HoldTimeUpdated": { "$className": "RemoteEvent" },
+				"MatchStateChanged": { "$className": "RemoteEvent" },
+				"RoundEnded": { "$className": "RemoteEvent" },
+				"MatchEnded": { "$className": "RemoteEvent" },
+				"FeedbackEvent": { "$className": "RemoteEvent" }
+			}
+		},
+
+		"ServerScriptService": {
+			"$className": "ServerScriptService",
+			"$path": "src/ServerScriptService"
+		},
+
+		"ServerStorage": {
+			"$className": "ServerStorage"
+		},
+
+		"Sound": {
+			"$className": "SoundService"
+		},
+
+		"StarterGui": {
+			"$className": "StarterGui"
+		},
+
+		"StarterPack": {
+			"$className": "StarterPack"
+		},
+
+		"StarterPlayer": {
+			"$className": "StarterPlayer",
+			"StarterCharacterScripts": {
+				"$className": "StarterCharacterScripts",
+				"$path": "src/StarterPlayer/StarterCharacterScripts"
+			},
+			"StarterPlayerScripts": {
+				"$className": "StarterPlayerScripts"
+			}
+		}
+	}
+}
