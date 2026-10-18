@@ -3,13 +3,17 @@
 	===============================
 	Server bootstrap. Runs once when the server starts.
 
-	Right now it only:
 	  1. Verifies the static Remotes tree exists (ReplicatedStorage.Remotes).
-	  2. Initializes the service stubs, which validates every require-path at
-	     boot instead of at first gameplay use.
+	  2. Initializes the service modules. As of Task 2, EggService is LIVE
+	     (egg spawn / auto-pickup / carry / hold time / fumble / respawn);
+	     Match, Combat, Scoring and Data remain documented stubs.
+	  3. Creates ServerScriptService.DebugCommands (BindableEvent) so server
+	     functions can be triggered from the Studio command bar while playing:
 
-	Gameplay is NOT implemented yet -- this prompt delivers structure, arena
-	and config only.
+	       game.ServerScriptService.DebugCommands:Fire("fumble")          -- drop the current carrier's egg
+	       game.ServerScriptService.DebugCommands:Fire("fumble", "Name")  -- drop a specific player's egg
+	       game.ServerScriptService.DebugCommands:Fire("respawn_egg")     -- force the egg back to center
+	       game.ServerScriptService.DebugCommands:Fire("state")           -- print egg state + hold times
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -40,20 +44,41 @@ for _, name in EXPECTED_REMOTES do
 	end
 end
 
--- 2) Initialize service modules (stubs for now)
-local SERVICES = {
-	"MatchService",
-	"EggService",
-	"CombatService",
-	"ScoringService",
-	"DataService",
-}
+-- 2) Require + initialize services
+local MatchService = require(ServerScriptService:WaitForChild("MatchService"))
+local EggService = require(ServerScriptService:WaitForChild("EggService"))
+local CombatService = require(ServerScriptService:WaitForChild("CombatService"))
+local ScoringService = require(ServerScriptService:WaitForChild("ScoringService"))
+local DataService = require(ServerScriptService:WaitForChild("DataService"))
 
-for _, name in SERVICES do
-	local service = require(ServerScriptService:WaitForChild(name))
+for _, service in ipairs({ MatchService, EggService, CombatService, ScoringService, DataService }) do
 	if type(service.Init) == "function" then
 		service.Init()
 	end
 end
 
-print("[Clutch the Egg] Server bootstrap complete -- structure + arena only, gameplay not built yet")
+-- 3) Debug commands: a BindableEvent bridge from the Studio command bar into
+--    the running server. Works even where the command bar cannot share the
+--    game's require() cache.
+local debugCommands = Instance.new("BindableEvent")
+debugCommands.Name = "DebugCommands"
+debugCommands.Parent = ServerScriptService
+
+debugCommands.Event:Connect(function(command, argument)
+	if typeof(command) ~= "string" then
+		warn('[DebugCommands] usage: Fire("fumble" | "respawn_egg" | "state" [, playerName])')
+		return
+	end
+	command = command:lower()
+	if command == "fumble" then
+		EggService.Fumble(argument, "DebugCommand")
+	elseif command == "respawn_egg" then
+		EggService.RespawnEggNow()
+	elseif command == "state" then
+		print("[DebugCommands] " .. EggService.DebugState())
+	else
+		warn('[DebugCommands] unknown command "' .. command .. '" (try: fumble, respawn_egg, state)')
+	end
+end)
+
+print("[Clutch the Egg] Server bootstrap complete -- egg system live (Task 2); match/combat/scoring are stubs")

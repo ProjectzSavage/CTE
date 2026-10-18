@@ -80,7 +80,7 @@ Config.AttackHitstun = 0.25      -- brief control loss for the victim
 --------------------------------------------------------------------------
 Config.ThrowSpeed = 60           -- egg launch speed (studs/s)
 Config.ThrowUpwardBias = 12      -- extra vertical component: it is a LOB, not a laser
-Config.ThrowSelfPickupDelay = 0.8 -- thrower cannot re-grab their OWN throw for this long
+Config.ThrowSelfPickupDelay = 0.8 -- cannot re-grab your OWN throw/fumble for this long
 
 --------------------------------------------------------------------------
 -- Block (always enabled)
@@ -101,13 +101,19 @@ Config.StaminaRegenDelay = 0.75 -- seconds after spending before regen resumes
 --------------------------------------------------------------------------
 -- Egg
 --------------------------------------------------------------------------
-Config.EggRadius = 1                  -- simple Part for now (art polish later)
-Config.EggHoldHeight = 2.5            -- offset above the carrier's HumanoidRootPart
-Config.EggRespawnDelay = 3            -- seconds out-of-arena before center respawn
+Config.EggRadius = 1                  -- simple glowing sphere for now (art polish later)
+Config.EggCarryOffsetUp = 0.75        -- weld offset above the torso part (studs)
+Config.EggCarryOffsetForward = 1.5    -- weld offset in front of the torso (studs)
+Config.EggRespawnDelay = 3            -- seconds out-of-arena OR unclaimed before center respawn
 Config.EggDropOnDashCollision = true  -- carrier dashes into a player -> egg drops
 Config.EggKnockLooseSpeed = 20        -- pop-off speed when the carrier is punched
 Config.EggKnockLooseUpward = 10
 Config.HoldTimePausesWhenLoose = true -- nobody accrues hold time while the egg is loose/respawning
+Config.EggProximityPickupRadius = 3   -- backup pickup scan radius around the loose egg (studs)
+Config.EggOutOfBoundsY = -40          -- below this Y the egg counts as fallen out of the arena
+Config.EggOutOfBoundsHorizontal = 70  -- beyond this |X|/|Z| counts as out of the arena
+Config.EggLooseResetRadius = 8        -- unclaimed egg farther than this from center resets to center
+Config.EggFumblePop = 4               -- gentle upward velocity when a fumble drops the egg (studs/s)
 
 --------------------------------------------------------------------------
 -- Arena (documents the BUILT geometry -- keep in sync with tools/gen_arena.py)

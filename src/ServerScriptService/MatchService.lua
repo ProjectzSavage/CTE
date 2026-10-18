@@ -11,8 +11,9 @@
 	* Best of Config.RoundsPerMatch rounds; first to Config.RoundsToWinMatch
 	  round wins takes the match.
 	* Broadcast MatchStateChanged / RoundEnded / MatchEnded to all clients.
-	* Coordinate the other services: tell EggService when to spawn/reset the
-	  egg, freeze combat at round end, ask ScoringService for the round winner
+	* Coordinate the other services: call EggService.StartRound() /
+	  EggService.EndRound() (and EggService.ResetHoldTimes() on a new match),
+	  freeze combat at round end, ask ScoringService for the round winner
 	  (most total hold time) and the match MVP (most hold time across rounds).
 ]]
 

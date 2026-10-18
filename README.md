@@ -15,14 +15,72 @@ and hold time pauses.
 
 ---
 
-## Current status: Task 1 — structure + arena + config (no gameplay yet)
+## Current status: Task 2 — the egg system is LIVE
 
 Open **[`ClutchTheEgg.rbxlx`](ClutchTheEgg.rbxlx)** in Roblox Studio and press
-Play: you spawn on one of the six colored pads and can walk around the walled
-arena. The server bootstrap prints a confirmation line; all gameplay systems
-are documented stubs.
+Play:
 
-## Quick start
+* A glowing golden egg drops onto the center pad at server start.
+* **Walk into it → you pick it up automatically** (no button). It welds in
+  front of your torso, your `WalkSpeed` drops to `Config.CarrySpeed` (12), and
+  your `Player` gets attribute `HasEgg = true`.
+* Hold time accrues while you carry it; `HoldTimeUpdated` broadcasts a
+  per-player leaderboard array at 10 Hz.
+* Death / respawn / leaving the game fumbles the egg automatically.
+* A loose egg nobody claims for 3 s (away from the center pad) — or that falls
+  out of the arena — respawns at center after `Config.EggRespawnDelay`.
+
+Match flow, combat, scoring and GUI are still documented stubs.
+
+### Testing in Studio
+
+**Solo (F5):** spawn, walk onto the gold pad, grab the egg, walk around.
+Then open the **command bar** (View → Command Bar) and fumble yourself:
+
+```lua
+-- Option A: direct require (works in Play Solo)
+require(game:GetService("ServerScriptService").EggService).Fumble()
+
+-- Option B: the debug BindableEvent created by Main (always works)
+game:GetService("ServerScriptService").DebugCommands:Fire("fumble")           -- current carrier
+game:GetService("ServerScriptService").DebugCommands:Fire("fumble", "Name")   -- specific player
+game:GetService("ServerScriptService").DebugCommands:Fire("respawn_egg")      -- force center respawn
+game:GetService("ServerScriptService").DebugCommands:Fire("state")            -- print state + hold times
+```
+
+After `Fumble()` the egg drops loose at your feet (you are locked out of
+re-grabbing it for `Config.ThrowSelfPickupDelay = 0.8 s`, another player can
+grab it instantly). Walk away and leave it untouched for 3 s → it respawns at
+center.
+
+**Two players:** Test tab → *Local Server* → Players: 2 → Start. Both clients
+see possession/hold-time updates; player 2 can snatch the egg after player 1
+fumbles.
+
+### Remote payload contracts (server → all clients)
+
+| Remote | Payload |
+| --- | --- |
+| `EggPossessionChanged` | `(newCarrier: Player?, previousCarrier: Player?)` |
+| `HoldTimeUpdated` | `(entries)` — array of `{ Player = Player, HoldTime = number }`, sorted desc; ~10 Hz while carried + one final push after changes |
+| `FeedbackEvent` | `(kind: string, data: table)` — kinds from EggService: `"EggPickup"`, `"EggFumble"`, `"EggOutOfBounds"`, `"EggRespawn"` |
+| `MatchStateChanged` / `RoundEnded` / `MatchEnded` | reserved for MatchService/ScoringService (later) |
+
+Client → server remotes (`RequestAttack`, `RequestThrow`, `RequestDash`,
+`RequestBlockStart`, `RequestBlockEnd`) exist but nothing listens yet —
+CombatService owns them in the next pass.
+
+### EggService public API (server)
+
+`Init()`, `StartRound()`, `EndRound()`, `GetCarrier()`, `GetEgg()`,
+`GetState()`, `GetHoldTime(player)`, `GetHoldTimes()`, `ResetHoldTimes()`,
+`Fumble(target?, reason?, popVelocity?)`, `RespawnEggNow()`, `DebugState()`.
+`Fumble` accepts a `Player`, a player name, or `nil` (= current carrier), and
+an optional `Vector3` pop velocity (CombatService will pass the knock-loose
+impulse later). Both `EggService.Fumble(...)` and `EggService:Fumble(...)`
+call styles work.
+
+## Quick start (building the place)
 
 **Option A — just open the place file (no tooling needed)**
 
@@ -55,9 +113,9 @@ rojo build -o ClutchTheEgg.rbxlx
 | `default.project.json`                               | structure manifest (also drives the Py builder)  | —             |
 | `src/ReplicatedStorage/Modules/Config.lua`           | `ReplicatedStorage.Modules.Config`               | ModuleScript  |
 | remotes (declared in `default.project.json`)         | `ReplicatedStorage.Remotes.*`                    | RemoteEvent   |
-| `src/ServerScriptService/Main.server.lua`            | `ServerScriptService.Main`                       | Script        |
+| `src/ServerScriptService/Main.server.lua`            | `ServerScriptService.Main` (+ `DebugCommands` BindableEvent at runtime) | Script |
 | `src/ServerScriptService/MatchService.lua`           | `ServerScriptService.MatchService`               | ModuleScript  |
-| `src/ServerScriptService/EggService.lua`             | `ServerScriptService.EggService`                 | ModuleScript  |
+| `src/ServerScriptService/EggService.lua`             | `ServerScriptService.EggService` (**implemented**) | ModuleScript |
 | `src/ServerScriptService/CombatService.lua`          | `ServerScriptService.CombatService`              | ModuleScript  |
 | `src/ServerScriptService/ScoringService.lua`         | `ServerScriptService.ScoringService`             | ModuleScript  |
 | `src/ServerScriptService/DataService.lua`            | `ServerScriptService.DataService` (reserved)     | ModuleScript  |
@@ -84,8 +142,7 @@ Server → client (replicated state + polish hooks):
 * `BoundaryNorth/South/East/West` — translucent cyan walls, inner faces at
   ±60 (playable square 120×120), height 5.
 * `CenterPad` — gold cylinder (Ø12, non-collidable) marking the egg zone.
-* `EggSpawnPoint` — invisible marker at Y=3; EggService will respawn the egg
-  here after it leaves the arena.
+* `EggSpawnPoint` — invisible marker at Y=3; EggService respawns the egg here.
 * `Spawn1..Spawn6` — neutral SpawnLocations on a hex ring at radius 48, one
   per party color.
 
@@ -108,9 +165,14 @@ Geometry constants live in `tools/gen_arena.py` and are documented by the
 
 ## Next steps (future prompts)
 
-- [ ] Egg: spawn, auto-pickup, possession + hold-time accrual, out-of-arena respawn
-- [ ] Combat: attack validation/knockback, block state, dash, stamina
+- [x] Egg: spawn, auto-pickup, possession + hold-time accrual, fumble,
+      out-of-arena respawn (Task 2)
+- [ ] Combat: attack validation/knockback (knocks the egg loose via
+      `EggService.Fumble(victim, "Attacked", popVelocity)`), throw handling,
+      block state, dash, stamina
 - [ ] Match: state machine, round clock, best-of-3, winners + MVP
-- [ ] GUI: HUD (hold-time leaderboard, stamina, ability buttons for mobile)
+- [ ] GUI: HUD (hold-time leaderboard from `HoldTimeUpdated`, stamina,
+      ability buttons for mobile)
 - [ ] Data: persistence
-- [ ] Polish: egg mesh, VFX/SFX via FeedbackEvent hooks
+- [ ] Polish: egg mesh, VFX/SFX via `FeedbackEvent` hooks; line-of-sight
+      check for the proximity pickup scan

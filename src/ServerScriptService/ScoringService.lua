@@ -5,8 +5,9 @@
 
 	Future responsibilities
 	-----------------------
-	* Record hold time per player per round (fed by EggService at
-	  Config.HoldTimeSyncInterval).
+	* Record hold time per player per round (read EggService.GetHoldTimes() /
+	  EggService.GetCarrier(), snapshotting at Config.HoldTimeSyncInterval or
+	  on RoundEnd).
 	* Round winner = most TOTAL hold time in that round (tie -> shared/no win,
 	  decided when built).
 	* Match MVP = most hold time accumulated across ALL
